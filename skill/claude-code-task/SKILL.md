@@ -106,6 +106,31 @@ Leé los campos `*evento:*`, `*tarea:*`, `*sesión:*` y `*rama:*`; el mensaje no
 - `StopFailure`: error de API (`error=rate_limit`, `authentication_failed`, `billing_error`, ...). Ver "Si falla".
 - `SessionEnd` (sin Stop previo) o `ProcessExit` · `exit=<código>`: el proceso terminó sin cerrar el turno (p.ej. `--max-turns`, señal, SIGKILL=137, OOM). En la nube, abrí la sesión y revisá la rama; en local, revisá `run.log` y el estado de la carpeta antes de decidir.
 
+## Elegir el modelo
+Regla vigente: antes de arrancar, preguntale al usuario si usa Claude o Cursor y qué modelo. Para eso mostrale la lista de modelos disponibles.
+
+- **Listar** (no interactivo, probado con Claude Code 2.1.300):
+  ```
+  timeout 60 claude -p '/model' </dev/null
+  ```
+  Imprime el modelo actual y los alias aceptados, p.ej. `Current model: ... (default)` y `Available: sonnet, opus, haiku, fable, best, sonnet[1m], opus[1m], fable[1m], opusplan, default, or a full model ID.`
+- **Ver a qué id resuelve un alias** (gasta un turno corto):
+  ```
+  timeout 90 claude -p --model <alias> --output-format json 'Respondé solo OK' </dev/null
+  ```
+  El id está en las claves de `modelUsage` (p.ej. `claude-<familia>-<versión>`).
+- **Pasarlo:** `--model <alias|id>` en el lanzamiento, también en la nube (verificado: el transcript de la sesión de la nube registró `"model"` con el id del alias elegido):
+  ```
+  script -qec 'claude --model <alias> --cloud "notify: <slug>
+  <tarea>"' /dev/null </dev/null
+  ```
+- `claude -p --teleport <id>` responde en local con tu modelo por defecto. Si querés ver el modelo de la sesión de la nube, buscá el campo `"model"` en el transcript que se trae a `~/.claude/projects/<carpeta>/`, en los turnos de la nube.
+
+Dudas (sin probar):
+- Si `--model` sirve con `claude -p ... --cloud <id>` para cambiar el modelo de una sesión que ya existe.
+- Si `ANTHROPIC_MODEL` o `"model"` en settings se respetan en la nube.
+- `--teleport` con el id `session_...` una vez trajo la sesión sin historial; con el id `cse_...` del aviso funcionó. Usá el id del aviso.
+
 ## Continuar o leer una sesión (nube)
 Probado con Claude Code 2.1.300. `<id>` es el id de la sesión (`cse_...` o `session_...`, el texto del link de `*sesión:*`); también acepta la URL `claude.ai/code/...`. Siempre con `timeout` y `</dev/null` para no colgarse.
 
