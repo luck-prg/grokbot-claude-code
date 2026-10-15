@@ -123,6 +123,14 @@ Dudas (sin probar):
 - No hay comando de CLI documentado para listar sesiones de la nube de forma no interactiva: `claude --teleport` sin id abre un selector interactivo (no usarlo desde un bot). El id sale del aviso de Slack o de claude.ai/code.
 - No probado: `claude -p --teleport` con `--output-format json`, ni sobre sesiones archivadas o con el environment vencido.
 
+## Control de respaldo
+La routine que dispara el aviso puede terminar en `failed` sin que te llegue nada. Por eso, al retomar la tarea (en tu próximo turno, si el usuario pregunta por ella o en un chequeo posterior):
+1. Leé `#<canal>` con el conector de Slack y buscá tu keyword `notify-<slug>` junto con la sesión o la rama de tu tarea.
+2. Si el aviso está ahí, procesalo a mano siguiendo "Al recibir el aviso".
+3. Si no hay aviso, leé el estado de la sesión con `claude -p --teleport <id>` (ver "Continuar o leer una sesión").
+
+No respondas en el canal de Slack; solo lo leés. Nunca esperes con loops de `pgrep` ni `sleep`.
+
 ## Si falla
 - Error de sesión o de cuenta: avisá al dueño; no intentes iniciar sesión vos.
 - Límite de uso: avisá y no reintentes en loop.
