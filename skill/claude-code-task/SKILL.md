@@ -64,7 +64,9 @@ Instrucción de la routine: "Llegó un aviso de Claude Code. Confirmá que la l�
    cd /workspace/cc/<repo>-<tarea>
    script -qec 'claude --cloud "Primero creá .claude-notify en la raíz con NOTIFY_AGENT=<slug> y NOTIFY_TASK=<tarea> (no lo commitees). Después: <objetivo, alcance y lo que NO se toca, cómo probar, criterio de listo>. Commiteá en la rama y hacé push de la rama. No mergees."' /dev/null </dev/null
    ```
-4. Terminá tu turno. No esperes ni revises (no polling): el aviso de Slack te despierta.
+4. Avisá al usuario que arrancó, con **un solo mensaje corto**, como con los agentes de Cursor. Tiene que tener el link de la sesión (`https://claude.ai/code/<session id>`, lo imprime `claude --cloud`) con el nombre de la tarea como texto, el modelo, la rama, que no va a mergear y que te avisan por Slack cuando termine. Plantilla:
+   > Ya arrancó la [sesión de Claude Code de <tarea>](https://claude.ai/code/<session id>), con <modelo>. Trabaja en la rama `<tipo>/<tarea>` y no va a mergear nada. Cuando termine me llega el aviso por Slack, lo reviso y te cuento.
+5. Terminá tu turno. No esperes ni revises (no polling): el aviso de Slack te despierta.
 
 En la nube, `*sesión:*` trae el link `<url|session_xxx>`: el texto del link es el id de sesión (si la variable de la nube no está, sale solo el id entre backticks). Las mismas reglas aplican.
 
@@ -82,7 +84,9 @@ Usala solo si la nube no está disponible (sin environment, sin GitHub conectado
 4. Corré en segundo plano con `notify-run` (mismos argumentos que `claude`; avisa también si el proceso muere sin que salte ningún hook, p.ej. SIGKILL u OOM):
    `cd /workspace/cc/<repo>-<tarea> && nohup notify-run -p "Leé BRIEF.md y hacelo. Al terminar escribí STATUS.md con: qué cambió, cómo probarlo, tests corridos con su resultado, y qué quedó pendiente o en duda. No mergees ni hagas push." < /dev/null > run.log 2>&1 &`
    Agregá `--permission-mode acceptEdits` si necesita editar sin pedir confirmación.
-5. Terminá tu turno. No esperes ni revises: el aviso te despierta.
+5. Avisá al usuario que arrancó, con un solo mensaje corto (no hay link de sesión: nombrá la carpeta). Plantilla:
+   > Ya arrancó Claude Code en local para <tarea> (carpeta `/workspace/cc/<repo>-<tarea>`), con <modelo>. Trabaja en la rama `<tipo>/<tarea>`, no hace push y no va a mergear nada. Cuando termine me llega el aviso por Slack, lo reviso y te cuento.
+6. Terminá tu turno. No esperes ni revises: el aviso te despierta.
 
 **Regla: nunca esperes con bucles de `pgrep` ni `pgrep -f`.** `pgrep -f` matchea contra la línea de comando completa, incluida la del propio `bash` que corre el bucle (que contiene el patrón buscado): se encuentra a sí mismo y el bucle nunca termina.
 Si de verdad tenés que esperar a que termine, hacelo de una de estas formas:
@@ -105,3 +109,9 @@ Leé los campos `*evento:*`, `*tarea:*`, `*sesión:*` y `*rama:*`; el mensaje no
 - Límite de uso: avisá y no reintentes en loop.
 - No llega ningún aviso: en la nube, revisá que el environment tenga `SLACK_NOTIFY_CHANNEL`, el network secret y `NOTIFY_AGENT` (o que Claude haya creado `.claude-notify`); en local, `${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log` y `.claude-notify`. Avisá al dueño en vez de hacer polling.
 - La nube no está disponible: pasá a la alternativa local.
+- La primera vez en una carpeta nueva el lanzamiento se queda colgado: en una sesión interactiva (como `claude --cloud` corrido con `script`), Claude Code muestra el diálogo "trust this folder" y espera una respuesta que nadie da. Las sesiones `-p` no lo muestran. La confianza se guarda por carpeta en `~/.claude.json`, en `projects["<ruta>"].hasTrustDialogAccepted`. Para evitarlo, antes de lanzar aceptá el diálogo una vez a mano en esa carpeta o marcá el worktree como confiable (con ningún otro `claude` abierto, porque las sesiones reescriben el archivo entero y pisan el cambio):
+  ```
+  f=~/.claude.json; d=/workspace/cc/<repo>-<tarea>
+  jq --arg d "$d" '.projects[$d].hasTrustDialogAccepted = true' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  ```
+  No lo hagas en tu carpeta home (ahí la confianza no se guarda). Si ya quedó colgado, matá ese proceso `script` y relanzá.
