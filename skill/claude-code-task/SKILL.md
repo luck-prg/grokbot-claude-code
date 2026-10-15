@@ -84,6 +84,12 @@ Usala solo si la nube no está disponible (sin environment, sin GitHub conectado
    Agregá `--permission-mode acceptEdits` si necesita editar sin pedir confirmación.
 5. Terminá tu turno. No esperes ni revises: el aviso te despierta.
 
+**Regla: nunca esperes con bucles de `pgrep` ni `pgrep -f`.** `pgrep -f` matchea contra la línea de comando completa, incluida la del propio `bash` que corre el bucle (que contiene el patrón buscado): se encuentra a sí mismo y el bucle nunca termina.
+Si de verdad tenés que esperar a que termine, hacelo de una de estas formas:
+- con `notify-run`: ya vigila el proceso y avisa cuando termina (incluso si muere sin hooks);
+- con el aviso de Slack (lo normal: terminá tu turno);
+- esperando el PID exacto que devolvió el lanzamiento: guardalo con `pid=$!` justo después del `&` y esperá con `wait "$pid"` (misma shell) o `tail --pid="$pid" -f /dev/null` (otra shell). Nunca lo busques por nombre o patrón.
+
 ## Al recibir el aviso
 Leé los campos `*evento:*`, `*tarea:*`, `*sesión:*` y `*rama:*`; el mensaje no trae resumen de lo que hizo Claude. Según `*evento:*` (y su detalle):
 - `Stop`: Claude terminó el turno. Revisá vos la rama (diff, tests); no confiés solo en lo que dice Claude.
