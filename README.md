@@ -211,6 +211,26 @@ Configurá las notificaciones de Claude Code para vos, con el flujo por agente d
 No hagas polling, no mergees, no hagas push de nada en este repo.
 ```
 
+## Problemas comunes
+
+El primer lugar para mirar es `${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log` (en la nube, dentro de la VM de la sesión).
+
+- **No llega nada y `notify.log` no registra el evento.**
+  *Causa:* no hay agente: ni `.claude-notify` (en la carpeta de trabajo o en la raíz del repo/worktree) ni `NOTIFY_AGENT` en el entorno. En ese caso el hook sale 0 en silencio, sin loguear. En la nube pasa seguido porque `.claude-notify` no se commitea y no viaja.
+  *Solución:* creá `.claude-notify` con `NOTIFY_AGENT=<agent-slug>` o, en la nube, poné `NOTIFY_AGENT` en las variables del environment (o pedile a Claude al inicio del prompt que cree el archivo sin commitearlo).
+- **`notify.log` dice `sin SLACK_NOTIFY_TOKEN` o `sin SLACK_NOTIFY_CHANNEL`.**
+  *Causa:* `~/.config/grokbot-claude-code/env` sigue con el placeholder `xoxb-REPLACE_ME` (el hook lo trata como vacío) o falta el channel id. En la nube es normal que no haya token en la VM (lo inyecta el proxy), pero el hook solo envía sin token propio si `CLAUDE_CODE_REMOTE=true`.
+  *Solución:* en local, completá `SLACK_NOTIFY_TOKEN` y `SLACK_NOTIFY_CHANNEL` en ese archivo (modo 600). En la nube, definí `SLACK_NOTIFY_CHANNEL` en las variables del environment y el network secret Bearer para `slack.com` ([paso 2](#2-nube-claudeaicode-environments-por-defecto)).
+- **`notify.log` dice `fallo al enviar (...)` con `not_in_channel`, `channel_not_found` o `invalid_auth`.**
+  *Causa:* el bot de notificaciones no es miembro del canal privado, `SLACK_NOTIFY_CHANNEL` tiene el nombre (`#<canal>`) en vez del id (`C0123456789`), o el token es inválido.
+  *Solución:* `/invite @<tu-app>` en `#<canal>`, usá el channel id y revisá el token. Como la marca de dedup se escribe solo si el envío salió bien, el próximo evento vuelve a intentar.
+- **El aviso aparece en el canal pero la routine del agente no dispara.**
+  *Causa:* `@Cursor` (la app que dispara las routines de Grok Bot) no está invitada al canal privado y no ve los mensajes, o el keyword de la routine no coincide con la línea `*agente:*` `` `notify-<slug>` `` (el hook convierte a `-` todo carácter fuera de `A-Za-z0-9_.-` del `NOTIFY_AGENT`).
+  *Solución:* `/invite @Cursor` en `#<canal>` y compará el keyword de la routine con el que muestra el aviso. Para probar, seguí la skill [`claude-code-notify-setup`](skill/claude-code-notify-setup/SKILL.md): una sola prueba, sin reintentar en loop.
+- **Se despierta otro agente además del correcto.**
+  *Causa:* colisión por substring: la routine matchea el keyword como substring, así que `notify-dev` también salta con un aviso para `notify-dev-ml`.
+  *Solución:* `bash local/check-slugs <todos-los-slugs-del-canal>` y cambiá el slug que choque (sale 1 y lista las colisiones).
+
 ## Comportamiento verificado
 
 Verificado con `claude -p` real en Linux (Stop + dedup de SessionEnd, Stop en pausa + SIGKILL → ProcessExit), con experimentos previos de hooks (SessionEnd en SIGINT/SIGTERM, subagentes con `agent_id`) y con `tests/simulate.sh` + la referencia de hooks para el resto.
