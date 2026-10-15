@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
 # grokbot-claude-code: hook de Claude Code que avisa en Slack a un agente de Grok Bot.
 #
-# Lee el JSON del hook por stdin y publica en el canal de notificaciones:
-#   [claude] notify-<agente> event=<evento> task=<tarea> session=<id|url> branch=<rama> summary=<resumen>
+# Lee el JSON del hook por stdin y publica en el canal de notificaciones un mensaje
+# Slack mrkdwn con un campo por línea (ver format_message):
+#   *Claude Code*
+#   • *evento:* `Stop`
+#   • *sesión:* <url|session_xxx>
+#   • *repo:* `owner/name`
+#   • *rama:* `x`
+#   • *agente:* `notify-<agente>`
+#   • *tarea:* `t`
 #
 # Nunca bloquea ni hace fallar a Claude: siempre sale con 0 y no escribe JSON en stdout.
 #
 # Variables (env o ~/.config/grokbot-claude-code/env):
 #   SLACK_NOTIFY_TOKEN    token xoxb- del bot (en la nube puede faltar: lo inyecta el proxy)
 #   SLACK_NOTIFY_CHANNEL  id del canal (#<canal>), p.ej. C0123456789
+#   SLACK_NOTIFY_USERNAME nombre con el que se publica (default "Claude Code")
+#   SLACK_NOTIFY_ICON_URL ícono con el que se publica (default el de la app de Claude)
+#                         Los dos necesitan el scope chat:write.customize; sin él Slack los ignora.
 #   NOTIFY_AGENT / NOTIFY_TASK  fallback si no hay archivo .claude-notify
 #   NOTIFY_SESSION_START=1      también avisa en SessionStart (apagado por defecto)
 #   DRY_RUN=1             imprime el payload en vez de mandarlo
@@ -21,7 +31,8 @@
 #                         a un servidor falso local, ver tests/test-scripts.sh). No tocar en uso real.
 
 SLACK_API_URL="${SLACK_API_URL:-https://slack.com/api/chat.postMessage}"
-SUMMARY_MAX=200
+DEFAULT_USERNAME="Claude Code"
+DEFAULT_ICON_URL="https://claude.ai/images/claude_app_icon.png"
 
 # Estado y log por usuario, nunca en un /tmp compartido.
 umask 077
@@ -102,24 +113,109 @@ json_escape() {
     printf '%s' "$1" | jq -Rs . 2>/dev/null
     return 0
   fi
-  printf '"%s"' "$(printf '%s' "$1" | tr '\n\r\t' '   ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+  # Los saltos de línea se conservan como \n (el mensaje es multilínea); otros controles se descartan.
+  printf '"%s"' "$(printf '%s' "$1" | tr '\t\r' '  ' | tr -d '\000-\010\013\014\016-\037' |
+    sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' |
+    awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
 }
 
-# Una línea, sin espacios repetidos, recortada.
+# oneline <texto> <max>: una línea, sin espacios repetidos, recortada a <max> caracteres + "…".
+# El recorte cuenta caracteres UTF-8, no bytes, y nunca parte un carácter multibyte.
 oneline() {
-  local s
+  local s max="$2" l probe="é"
   s=$(printf '%s' "$1" | tr '\n\r\t' '   ' | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')
-  if [ "${#s}" -gt "$SUMMARY_MAX" ]; then
-    s="${s:0:$SUMMARY_MAX}..."
+  for l in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+    ( LC_ALL=$l; [ "${#probe}" = 1 ] ) 2>/dev/null || continue
+    (
+      LC_ALL=$l
+      if [ "${#s}" -gt "$max" ]; then printf '%s…' "${s:0:$max}"; else printf '%s' "$s"; fi
+    )
+    return 0
+  done
+  # Sin locale UTF-8: se corta por bytes y iconv descarta el multibyte partido.
+  if [ "${#s}" -gt "$max" ]; then
+    s="$(printf '%s' "${s:0:$max}" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null)…"
   fi
   printf '%s' "$s"
 }
 
-# Texto libre (resumen, tarea, rama): que no despierte a otro agente ni haga ping.
+# Texto libre (tarea, rama): que no despierte a otro agente ni haga ping.
 # notify- → notify‐ (U+2010) y & < > escapados como pide Slack (<!channel>, <@U…>, <#C…>).
 neutralize() {
   printf '%s' "$1" | sed -e 's/\([Nn][Oo][Tt][Ii][Ff][Yy]\)-/\1‐/g' \
     -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# code_span <texto>: `texto` para Slack, neutralizado y sin backticks que rompan el span.
+code_span() {
+  # shellcheck disable=SC2016 # los backticks son literales de mrkdwn
+  printf '`%s`' "$(neutralize "$(printf '%s' "$1" | tr -d '`')")"
+}
+
+# repo_slug <url>: owner/name de un remote git (https, ssh://, scp-like git@host:o/n.git).
+# Descarta credenciales (user:token@) y el host; vacío si no es un remote de red.
+repo_slug() {
+  local u="$1" path
+  case "$u" in
+    *://*)
+      case "$u" in file://*) return 0 ;; esac
+      u="${u#*://}"
+      u=$(printf '%s' "$u" | sed -E 's#^[^/]*@##') # userinfo (el último @ del authority)
+      path="${u#*/}"
+      [ "$path" != "$u" ] || return 0
+      ;;
+    *:*)
+      case "$u" in /* | ./* | ../*) return 0 ;; esac
+      u=$(printf '%s' "$u" | sed -E 's#^[^/:]*@##') # git@host:o/n
+      path="${u#*:}"
+      ;;
+    *) return 0 ;;
+  esac
+  path=$(printf '%s' "$path" | sed -E -e 's#[?\#].*$##' -e 's#/+$##' -e 's#\.git$##')
+  # Últimos dos componentes (owner/name), incluso con subgrupos de GitLab.
+  printf '%s' "$path" | awk -F/ 'NF >= 2 { print $(NF-1) "/" $NF }'
+}
+
+# format_message <evento> <detalle> <sesión> <agente> <tarea> <rama> <repo>
+# Arma el texto Slack mrkdwn (el campo "text" del POST). Sin LLM, determinístico.
+# Un campo por línea, `• *<campo>:* <valor>`, con el valor en `código` o como <url|id>:
+#   *Claude Code*
+#   • *evento:* `StopFailure` · `error=rate_limit`
+#   • *sesión:* <https://claude.ai/code/session_abc|session_abc>   (en local: `<session_id>`)
+#   • *repo:* `o/n`
+#   • *rama:* `x`
+#   • *agente:* `notify-slug`
+#   • *tarea:* `t`
+# Los campos vacíos (o `-`) se omiten con su línea. El único notify-<slug> real es el
+# del agente; el texto variable se neutraliza.
+format_message() {
+  local event="$1" detail="$2" session="$3" agent="$4" task="$5" branch="$6" repo="$7"
+  local nl=$'\n' b='• ' out url id f name val
+
+  out="*Claude Code*"
+  [ -n "$event" ] && out+="$nl$b*evento:* $(code_span "$event")${detail:+ · $(code_span "$detail")}"
+  case "$session" in
+    '' | '-') ;;
+    https://*)
+      # El texto del link es el id de sesión (el último segmento de la URL).
+      url=$(printf '%s' "$session" | tr -d '<>| `')
+      id="${url%/}" id="${id##*/}"
+      out+="$nl$b*sesión:* <$url|$(printf '%s' "${id:-$url}" | sed 's/&/\&amp;/g')>"
+      ;;
+    *) out+="$nl$b*sesión:* $(code_span "$session")" ;;
+  esac
+
+  for f in "repo|$repo" "rama|$branch" "agente|$agent" "tarea|$task"; do
+    name="${f%%|*}" val="${f#*|}"
+    case "$val" in '' | '-') continue ;; esac
+    if [ "$name" = agente ]; then
+      # Literal: es el keyword que matchea la routine (el slug ya viene saneado).
+      out+="$nl$b*agente:* \`notify-$val\`"
+    else
+      out+="$nl$b*$name:* $(code_span "$val")"
+    fi
+  done
+  printf '%s' "$out"
 }
 
 slug() {
@@ -131,10 +227,13 @@ load_config() {
   [ -r "$cfg" ] || return 0
   # El env del proceso gana sobre el archivo.
   local tok="${SLACK_NOTIFY_TOKEN-}" chan="${SLACK_NOTIFY_CHANNEL-}"
+  local user="${SLACK_NOTIFY_USERNAME-}" icon="${SLACK_NOTIFY_ICON_URL-}"
   # shellcheck disable=SC1090
   . "$cfg" 2>/dev/null || true
   [ -n "$tok" ] && SLACK_NOTIFY_TOKEN="$tok"
   [ -n "$chan" ] && SLACK_NOTIFY_CHANNEL="$chan"
+  [ -n "$user" ] && SLACK_NOTIFY_USERNAME="$user"
+  [ -n "$icon" ] && SLACK_NOTIFY_ICON_URL="$icon"
   # Placeholders del instalador = sin configurar.
   case "${SLACK_NOTIFY_TOKEN:-}" in *REPLACE_ME*) SLACK_NOTIFY_TOKEN="" ;; esac
   return 0
@@ -181,7 +280,11 @@ send() {
   local text="$1" payload resp
   # Peor caso ≈ 2×4 s + 1 s: entra en el timeout de 10 s de SessionEnd.
   local curl_opts=(-sS --connect-timeout 3 --max-time 4 --retry 1 --retry-delay 1)
-  payload=$(printf '{"channel":%s,"text":%s}' "$(json_escape "$SLACK_NOTIFY_CHANNEL")" "$(json_escape "$text")")
+  # username/icon_url requieren el scope chat:write.customize; sin él Slack los ignora sin error.
+  payload=$(printf '{"channel":%s,"text":%s,"username":%s,"icon_url":%s}' \
+    "$(json_escape "$SLACK_NOTIFY_CHANNEL")" "$(json_escape "$text")" \
+    "$(json_escape "${SLACK_NOTIFY_USERNAME:-$DEFAULT_USERNAME}")" \
+    "$(json_escape "${SLACK_NOTIFY_ICON_URL:-$DEFAULT_ICON_URL}")")
   if [ "${DRY_RUN:-0}" = "1" ]; then
     printf 'DRY_RUN POST %s %s\n' "$SLACK_API_URL" "$payload"
     log "dry-run: $text"
@@ -205,7 +308,7 @@ send() {
   case "$resp" in
     *'"ok":true'*) log "enviado: $text" ;;
     *)
-      log "fallo al enviar ($(oneline "$resp")): $text"
+      log "fallo al enviar ($(oneline "$resp" 200)): $text"
       return 1
       ;;
   esac
@@ -245,7 +348,7 @@ main() {
     return 0
   fi
 
-  local detail="" summary="" terminal=0 key="$event"
+  local detail="" terminal=0 key="$event"
   case "$event" in
     Stop)
       terminal=1
@@ -257,14 +360,12 @@ main() {
         log "Stop en pausa (tareas en segundo plano/crons), no se avisa: $SESSION_ID"
         return 0
       fi
-      summary=$(json_get last_assistant_message)
       ;;
     StopFailure)
       terminal=1
       key="StopFailure-$turn"
       marked "$key" && return 0
       detail="error=$(slug "$(json_get error)")"
-      summary=$(json_get last_assistant_message)
       ;;
     SessionEnd)
       terminal=1
@@ -289,14 +390,10 @@ main() {
       key="Notification-$ntype-$turn"
       marked "$key" && return 0
       detail="type=$ntype"
-      summary=$(json_get message)
       ;;
     PermissionRequest)
       # Solo el nombre de la tool: tool_input (p.ej. el comando) puede traer credenciales.
-      local tool
-      tool=$(json_get tool_name)
-      detail="tool=$(slug "$tool")"
-      summary="$tool"
+      detail="tool=$(slug "$(json_get tool_name)")"
       ;;
     SessionStart)
       [ "${NOTIFY_SESSION_START:-0}" = "1" ] || return 0
@@ -307,7 +404,6 @@ main() {
       # Lo genera local/notify-run cuando ningún hook avisó (SIGKILL, OOM, crash).
       terminal=1
       detail="exit=$(slug "$(json_get exit_code)")"
-      summary=$(json_get message)
       ;;
     *)
       return 0
@@ -320,16 +416,16 @@ main() {
     return 0
   fi
 
-  local session="$SESSION_ID" branch text
+  local session="$SESSION_ID" branch text repo
   if [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] && [ -n "${CLAUDE_CODE_REMOTE_SESSION_ID:-}" ]; then
-    session="https://claude.ai/code/${CLAUDE_CODE_REMOTE_SESSION_ID}"
+    session="https://claude.ai/code/$(slug "$CLAUDE_CODE_REMOTE_SESSION_ID")"
   fi
   branch=$(git -C "$cwd" symbolic-ref --short -q HEAD 2>/dev/null ||
     git -C "$cwd" rev-parse --short HEAD 2>/dev/null) || branch="-"
   [ -n "$branch" ] || branch="-"
+  repo=$(repo_slug "$(git -C "$cwd" remote get-url origin 2>/dev/null)")
 
-  # El único notify- real es el keyword del principio; el resto se neutraliza.
-  text="[claude] notify-$AGENT $(neutralize "event=$event${detail:+ $detail} task=$TASK session=$session branch=$branch summary=$(oneline "${summary:--}")")"
+  text=$(format_message "$event" "$detail" "$session" "$AGENT" "$TASK" "$branch" "$repo")
 
   # Las marcas de dedup van después de un envío exitoso: si falla, el próximo evento reintenta.
   send "$text" || return 0
@@ -339,5 +435,8 @@ main() {
   fi
 }
 
-main "$@" || true
-exit 0
+# Con `source` solo define las funciones (los tests llaman a format_message).
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@" || true
+  exit 0
+fi

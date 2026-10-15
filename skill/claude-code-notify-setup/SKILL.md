@@ -12,8 +12,16 @@ description: >-
 Los hooks de Claude Code (local o nube) publican en el canal de avisos un mensaje así:
 
 ```
-[claude] notify-<slug> event=<evento> task=<tarea> session=<id|url> branch=<rama> summary=<resumen>
+*Claude Code*
+• *evento:* `<evento>`
+• *sesión:* <url|session_xxx>
+• *repo:* `owner/name`
+• *rama:* `<rama>`
+• *agente:* `notify-<slug>`
+• *tarea:* `<tarea>`
 ```
+
+Un campo por línea (`• *<campo>:* <valor>`, valor entre backticks o `<url|session_xxx>`); los campos vacíos no aparecen. La routine identifica al agente por la línea `*agente:*` `` `notify-<slug>` ``, que es el único `notify-` real del mensaje. Detalle del parseo en la skill `claude-code-task`.
 
 Cada agente tiene una routine que despierta solo con **su** keyword `notify-<slug>`. Esta skill se corre una vez (por agente o una vez para varios). Para lanzar tareas después, usá la skill `claude-code-task`.
 
@@ -53,7 +61,7 @@ Trigger, con el nombre de canal que te dio el usuario:
 
 Instrucción de la routine:
 
-> Llegó un aviso de Claude Code. Leé el mensaje y sacá `event=`, `task=`, `session=`, `branch=` y `summary=`. Buscá la tarea por `task=` y seguí "Al recibir el aviso" de la skill claude-code-task: continuá la tarea o reportá el resultado a quien la pidió. No cambies nada fuera del alcance de esa tarea.
+> Llegó un aviso de Claude Code. Confirmá que la línea `*agente:*` diga `` `notify-<slug>` `` (si no, ignorá el mensaje). Cada línea es `• *<campo>:* <valor>`, con el valor entre backticks o como `<url|session_xxx>`: sacá `evento` (con su detalle, p.ej. `error=rate_limit`), `tarea`, `sesión` y `rama`. Buscá la tarea por `tarea` y seguí "Al recibir el aviso" de la skill claude-code-task: continuá la tarea o reportá el resultado a quien la pidió. No cambies nada fuera del alcance de esa tarea.
 
 Requisito: `@Cursor` tiene que estar invitado a `#<canal>` (es la app que dispara las routines; si no ve el canal, la routine nunca salta). Si no está, pedíselo al usuario.
 
@@ -69,7 +77,7 @@ echo "{\"session_id\":\"prueba-$(date +%s)\",\"cwd\":\"$d\",\"hook_event_name\":
 cd - >/dev/null && rm -rf "$d"
 ```
 
-(Si no corriste `local/install.sh`, usá `hooks/notify.sh` del repo. El `session_id` distinto evita que el dedup lo descarte.) Sin acceso local: pedile al usuario que publique con el bot de notificaciones `[claude] notify-<slug> event=Stop task=prueba-notify`.
+(Si no corriste `local/install.sh`, usá `hooks/notify.sh` del repo. El `session_id` distinto evita que el dedup lo descarte.) Sin acceso local: pedile al usuario que publique con el bot de notificaciones un mensaje con el formato de arriba, con las líneas `` • *evento:* `Stop` ``, `` • *agente:* `notify-<slug>` `` y `` • *tarea:* `prueba-notify` ``.
 
 Confirmá que la routine de ese bot disparó **una** vez y que no despertó a otro. Si no salta: revisá `${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log`, que `@Cursor` y el bot de notificaciones estén en el canal y que el keyword esté bien escrito. No reintentes en loop.
 
@@ -101,7 +109,7 @@ Prompt por agente (lo que mandás con `SendToAgent` o le das al usuario para peg
 Configurate para que te despierten los avisos de Claude Code (skill claude-code-notify-setup del repo grokbot-claude-code).
 - Canal de avisos: #<canal>
 - Tu slug: <slug> (keyword notify-<slug>). Ya está chequeado contra colisión por substring con los demás slugs.
-1) Creá en vos una routine con trigger {"type":"slack","channel":"#<canal>","match":{"kind":"keyword","keyword":"notify-<slug>"}} cuya instrucción lea el aviso (event, task, session, branch, summary) y siga "Al recibir el aviso" de la skill claude-code-task, sin cambiar nada fuera del alcance de la tarea.
+1) Creá en vos una routine con trigger {"type":"slack","channel":"#<canal>","match":{"kind":"keyword","keyword":"notify-<slug>"}} cuya instrucción confirme la línea *agente:* `notify-<slug>`, lea los campos del aviso (una línea por campo, • *<campo>:* <valor>, valor entre backticks o <url|session_xxx>: evento, tarea, sesión, rama) y siga "Al recibir el aviso" de la skill claude-code-task, sin cambiar nada fuera del alcance de la tarea.
 2) Guardá en tu memoria el slug, el keyword y el canal; usá NOTIFY_AGENT=<slug> al lanzar tareas.
 3) No hagas la prueba vos: avisame cuando la routine esté creada y yo mando una sola prueba.
 No pegues tokens en el chat ni en ningún repo. No hagas polling.

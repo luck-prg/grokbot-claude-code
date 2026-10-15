@@ -12,8 +12,21 @@ Claude Code está instalado en la computadora compartida (`~/.local/bin/claude`)
 Cuando Claude termina, falla o necesita input, un hook publica en el canal privado `#<canal>`:
 
 ```
-[claude] notify-<slug> event=<evento> task=<tarea> session=<id|url> branch=<rama> summary=<resumen>
+*Claude Code*
+• *evento:* `<evento>`
+• *sesión:* <url|session_xxx>
+• *repo:* `owner/name`
+• *rama:* `<rama>`
+• *agente:* `notify-<slug>`
+• *tarea:* `<tarea>`
 ```
+
+Cómo parsearlo (humano, script o agente):
+- La primera línea es el título fijo `*Claude Code*` (sin viñeta). Cada línea siguiente es un campo y empieza con `• ` (U+2022 + espacio): `• *<campo>:* <valor>` (regex `^• \*([^*]+):\* (.*)$`).
+- El valor va entre backticks (`` `valor` ``) o, en `sesión` en la nube, como link `<url|session_xxx>` (la URL es lo que está entre `<` y `|`; el texto del link, entre `|` y `>`, es el id de sesión). En local, `sesión` es el id entre backticks.
+- `evento` puede traer un detalle en un segundo span: `` `StopFailure` · `error=rate_limit` ``.
+- Campos posibles, en este orden: `evento`, `sesión`, `repo`, `rama`, `agente`, `tarea`. Si un campo no tiene valor, su línea no está.
+- `agente` es tu keyword `notify-<slug>` tal cual. Es el único `notify-` real del mensaje: en los demás valores aparece como `notify‐` (guion U+2010) y `&`, `<`, `>` como `&amp;`, `&lt;`, `&gt;`.
 
 Tu routine con trigger Slack por keyword `notify-<slug>` te despierta solo a vos. **No hagas polling** (no `sleep`, no revisar `run.log` en loop, no `ps`): esperá el mensaje.
 
@@ -31,7 +44,7 @@ Si todavía no te configuraste, seguí la skill `claude-code-notify-setup`. Tien
 {type:'slack', channel:'#<canal>', match:{kind:'keyword', keyword:'notify-<slug>'}}
 ```
 
-Instrucción de la routine: "Llegó un aviso de Claude Code. Leé el mensaje, buscá la tarea por `task=` y seguí los pasos de 'Al recibir el aviso' del skill claude-code-task."
+Instrucción de la routine: "Llegó un aviso de Claude Code. Confirmá que la línea `*agente:*` diga `` `notify-<slug>` `` (si no, ignorá el mensaje). Cada línea es `• *<campo>:* <valor>`, con el valor entre backticks o como `<url|session_xxx>`: sacá `evento`, `tarea`, `sesión` y `rama`, buscá la tarea por `tarea` y seguí los pasos de 'Al recibir el aviso' del skill claude-code-task."
 
 ## Pasos (local)
 1. Prepará la carpeta: `git worktree add /workspace/cc/<repo>-<tarea> -b <tipo>/<tarea> origin/<base>` desde un clon del repo (o un clon nuevo en esa ruta).
@@ -51,16 +64,16 @@ Instrucción de la routine: "Llegó un aviso de Claude Code. Leé el mensaje, bu
 `claude --cloud "<tarea>"` desde la carpeta del repo crea una sesión que corre en la nube de Anthropic sobre la rama actual del remoto de GitHub (hacé push antes). Requiere GitHub conectado a la cuenta de Claude (`/web-setup` dentro de `claude`) y un environment configurado con el setup script de grokbot-claude-code (ver README del repo).
 
 - `.claude-notify` no viaja a la nube (no está commiteado). Usá un environment con `NOTIFY_AGENT=<slug>` en sus variables, o empezá la tarea con: "Primero creá `.claude-notify` en la raíz con `NOTIFY_AGENT=<slug>` y `NOTIFY_TASK=<tarea>` (no lo commitees)."
-- `session=` puede traer la URL o el id de la sesión. Para traerla de vuelta: `claude --teleport <id>`.
+- `*sesión:*` trae el link `<url|session_xxx>`: el texto del link es el id de sesión (si la variable de la nube no está, sale solo el id entre backticks). Para traerla de vuelta: `claude --teleport <id>`.
 - Las mismas reglas aplican.
 
 ## Al recibir el aviso
-Según `event=`:
+Leé los campos `*evento:*`, `*tarea:*`, `*sesión:*` y `*rama:*`; el mensaje no trae resumen de lo que hizo Claude. Según `*evento:*` (y su detalle):
 - `Stop`: Claude terminó el turno. Leé `STATUS.md` y verificá vos (tests, diff). No confiés solo en la nota. Si está bien, hacé push de la rama y abrí el PR siguiendo las reglas del repo. Borrá la carpeta con `git worktree remove` al cerrar.
-- `PermissionRequest` / `Notification type=permission_prompt|elicitation_*`: Claude necesita permiso o input. En `-p` el permiso se deniega solo; revisá `run.log` y, si hace falta, relanzá con el permiso adecuado. En la nube, respondé en la sesión.
-- `Notification type=idle_prompt`: sesión interactiva esperando input.
+- `PermissionRequest` (`tool=<tool>`) / `Notification` (`type=permission_prompt|elicitation_*`): Claude necesita permiso o input. En `-p` el permiso se deniega solo; revisá `run.log` y, si hace falta, relanzá con el permiso adecuado. En la nube, respondé en la sesión.
+- `Notification` · `type=idle_prompt`: sesión interactiva esperando input.
 - `StopFailure`: error de API (`error=rate_limit`, `authentication_failed`, `billing_error`, ...). Ver "Si falla".
-- `SessionEnd` (sin Stop previo) o `ProcessExit exit=<código>`: el proceso terminó sin cerrar el turno (p.ej. `--max-turns`, señal, SIGKILL=137, OOM). Revisá `run.log` y el estado de la carpeta antes de decidir.
+- `SessionEnd` (sin Stop previo) o `ProcessExit` · `exit=<código>`: el proceso terminó sin cerrar el turno (p.ej. `--max-turns`, señal, SIGKILL=137, OOM). Revisá `run.log` y el estado de la carpeta antes de decidir.
 
 ## Si falla
 - Error de sesión o de cuenta: avisá al dueño; no intentes iniciar sesión vos.
