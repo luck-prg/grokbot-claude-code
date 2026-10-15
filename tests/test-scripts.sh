@@ -89,6 +89,7 @@ reset_capture() { rm -f "$captured"; rm -rf "$NOTIFY_STATE_DIR"; }
 n_requests() { if [ -f "$captured" ]; then wc -l <"$captured" | tr -d ' '; else echo 0; fi; }
 req_text() { sed -n "${1}p" "$captured" | jq -r '.body | fromjson | .text'; }
 req_channel() { sed -n "${1}p" "$captured" | jq -r '.body | fromjson | .channel'; }
+req_field() { sed -n "${1}p" "$captured" | jq -r --arg k "$2" '.body | fromjson | .[$k]'; }
 req_auth() { sed -n "${1}p" "$captured" | jq -r '.headers | to_entries[] | select(.key | ascii_downcase == "authorization") | .value'; }
 
 proj="$work/proj"
@@ -100,17 +101,19 @@ reset_capture
 printf '{"session_id":"s1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"listo"}' "$proj" |
   SLACK_NOTIFY_TOKEN="$fake_token" SLACK_NOTIFY_CHANNEL=C0123456789 bash "$hook"
 rc=$?
-expected='🤖 *Claude Code*
-*evento:* `Stop`
-*sesión:* `s1`
-*agente:* `notify-agente-x`
-*tarea:* `tarea-1`'
+expected='*Claude Code*
+• *evento:* `Stop`
+• *sesión:* `s1`
+• *agente:* `notify-agente-x`
+• *tarea:* `tarea-1`'
 if [ "$rc" = 0 ] && [ "$(n_requests)" = 1 ] &&
   [ "$(req_channel 1)" = C0123456789 ] &&
   [ "$(req_text 1)" = "$expected" ] &&
   [ "$(req_auth 1)" = "Bearer $fake_token" ] &&
+  [ "$(req_field 1 username)" = 'Claude Code' ] &&
+  [ "$(req_field 1 icon_url)" = 'https://claude.ai/images/claude_app_icon.png' ] &&
   grep -q 'enviado: ' "$NOTIFY_STATE_DIR/notify.log"; then
-  ok "notify.sh POST real: canal, texto exacto, keyword y Authorization"
+  ok "notify.sh POST real: canal, texto exacto, keyword, Authorization, username/icon_url default"
 else
   ko "notify.sh POST real" "rc=$rc req=$(cat "$captured" 2>/dev/null) log=$(cat "$NOTIFY_STATE_DIR/notify.log" 2>/dev/null)"
 fi
@@ -120,19 +123,40 @@ printf '{"session_id":"s1","cwd":"%s","hook_event_name":"Stop","last_assistant_m
   SLACK_NOTIFY_TOKEN="$fake_token" SLACK_NOTIFY_CHANNEL=C0123456789 bash "$hook"
 if [ "$(n_requests)" = 1 ]; then ok "dedup después de un envío real"; else ko "dedup después de un envío real" "requests=$(n_requests)"; fi
 
-# 1c. Nube sin token (lo inyecta el proxy): sin Authorization propio, sesión como <url|abrir>.
+# 1c. Nube sin token (lo inyecta el proxy): sin Authorization propio, sesión como <url|id>.
 reset_capture
 printf '{"session_id":"s1c","cwd":"%s","hook_event_name":"StopFailure","error":"rate_limit"}' "$proj" |
   CLAUDE_CODE_REMOTE=true CLAUDE_CODE_REMOTE_SESSION_ID=session_abc SLACK_NOTIFY_CHANNEL=C0123456789 bash "$hook"
-expected='🤖 *Claude Code*
-*evento:* `StopFailure` · `error=rate_limit`
-*sesión:* <https://claude.ai/code/session_abc|abrir>
-*agente:* `notify-agente-x`
-*tarea:* `tarea-1`'
+expected='*Claude Code*
+• *evento:* `StopFailure` · `error=rate_limit`
+• *sesión:* <https://claude.ai/code/session_abc|session_abc>
+• *agente:* `notify-agente-x`
+• *tarea:* `tarea-1`'
 if [ "$(n_requests)" = 1 ] && [ "$(req_text 1)" = "$expected" ] && [ -z "$(req_auth 1)" ]; then
-  ok "nube: POST sin Authorization, sesión como link"
+  ok "nube: POST sin Authorization, sesión como link con el id"
 else
   ko "nube: POST sin token" "req=$(cat "$captured" 2>/dev/null)"
+fi
+
+# 1d. username/icon_url por env, en el POST real con y sin jq (body JSON válido e igual).
+bodies=()
+for nojq in 0 1; do
+  reset_capture
+  printf '{"session_id":"s1d","cwd":"%s","hook_event_name":"Stop"}' "$proj" |
+    SLACK_NOTIFY_TOKEN="$fake_token" SLACK_NOTIFY_CHANNEL=C0123456789 NOTIFY_NO_JQ=$nojq \
+      SLACK_NOTIFY_USERNAME='Grok "QA"' SLACK_NOTIFY_ICON_URL='https://example.com/i.png' bash "$hook"
+  bodies[nojq]=$(sed -n 1p "$captured" | jq -c '.body | fromjson')
+  if [ "$(n_requests)" = 1 ] && [ "$(req_field 1 username)" = 'Grok "QA"' ] &&
+    [ "$(req_field 1 icon_url)" = 'https://example.com/i.png' ]; then
+    ok "POST real con username/icon_url por env (NOTIFY_NO_JQ=$nojq)"
+  else
+    ko "POST real username/icon_url (NOTIFY_NO_JQ=$nojq)" "req=$(cat "$captured" 2>/dev/null)"
+  fi
+done
+if [ -n "${bodies[0]}" ] && [ "${bodies[0]}" = "${bodies[1]}" ]; then
+  ok "body del POST igual con y sin jq"
+else
+  ko "body con y sin jq" "jq=[${bodies[0]}] sed=[${bodies[1]}]"
 fi
 
 # 2. notify-run: claude falso que sale 137 → ProcessExit exit=137 publicado.
@@ -144,8 +168,8 @@ chmod +x "$fake"
   SLACK_NOTIFY_CHANNEL=C0123456789 bash "$repo_dir/local/notify-run" -p hola)
 rc=$?
 if [ "$rc" = 137 ] && [ "$(n_requests)" = 1 ] &&
-  req_text 1 | grep -qxF '*evento:* `ProcessExit` · `exit=137`' &&
-  req_text 1 | grep -qxF '*agente:* `notify-agente-x`'; then
+  req_text 1 | grep -qxF '• *evento:* `ProcessExit` · `exit=137`' &&
+  req_text 1 | grep -qxF '• *agente:* `notify-agente-x`'; then
   ok "notify-run exit 137 → ProcessExit publicado"
 else
   ko "notify-run exit 137" "rc=$rc req=$(cat "$captured" 2>/dev/null)"
@@ -163,7 +187,7 @@ chmod +x "$fake2"
 (cd "$proj" && NOTIFY_CLAUDE_BIN="$fake2" NOTIFY_HOOK="$hook" SLACK_NOTIFY_TOKEN="$fake_token" \
   SLACK_NOTIFY_CHANNEL=C0123456789 bash "$repo_dir/local/notify-run" -p hola)
 rc=$?
-if [ "$rc" = 0 ] && [ "$(n_requests)" = 1 ] && req_text 1 | grep -qxF '*evento:* `Stop`' &&
+if [ "$rc" = 0 ] && [ "$(n_requests)" = 1 ] && req_text 1 | grep -qxF '• *evento:* `Stop`' &&
   ! grep -q ProcessExit "$captured"; then
   ok "notify-run con Stop → sin ProcessExit"
 else

@@ -12,18 +12,18 @@ Claude Code está instalado en la computadora compartida (`~/.local/bin/claude`)
 Cuando Claude termina, falla o necesita input, un hook publica en el canal privado `#<canal>`:
 
 ```
-🤖 *Claude Code*
-*evento:* `<evento>`
-*sesión:* <url|abrir>
-*repo:* `owner/name`
-*rama:* `<rama>`
-*agente:* `notify-<slug>`
-*tarea:* `<tarea>`
+*Claude Code*
+• *evento:* `<evento>`
+• *sesión:* <url|session_xxx>
+• *repo:* `owner/name`
+• *rama:* `<rama>`
+• *agente:* `notify-<slug>`
+• *tarea:* `<tarea>`
 ```
 
 Cómo parsearlo (humano, script o agente):
-- La primera línea es el título fijo `🤖 *Claude Code*`. Cada línea siguiente es un campo: `*<campo>:* <valor>` (regex `^\*([^*]+):\* (.*)$`).
-- El valor va entre backticks (`` `valor` ``) o, en `sesión` en la nube, como link `<url|abrir>` (la URL es lo que está entre `<` y `|`). En local, `sesión` es el id entre backticks.
+- La primera línea es el título fijo `*Claude Code*` (sin viñeta). Cada línea siguiente es un campo y empieza con `• ` (U+2022 + espacio): `• *<campo>:* <valor>` (regex `^• \*([^*]+):\* (.*)$`).
+- El valor va entre backticks (`` `valor` ``) o, en `sesión` en la nube, como link `<url|session_xxx>` (la URL es lo que está entre `<` y `|`; el texto del link, entre `|` y `>`, es el id de sesión). En local, `sesión` es el id entre backticks.
 - `evento` puede traer un detalle en un segundo span: `` `StopFailure` · `error=rate_limit` ``.
 - Campos posibles, en este orden: `evento`, `sesión`, `repo`, `rama`, `agente`, `tarea`. Si un campo no tiene valor, su línea no está.
 - `agente` es tu keyword `notify-<slug>` tal cual. Es el único `notify-` real del mensaje: en los demás valores aparece como `notify‐` (guion U+2010) y `&`, `<`, `>` como `&amp;`, `&lt;`, `&gt;`.
@@ -44,7 +44,7 @@ Si todavía no te configuraste, seguí la skill `claude-code-notify-setup`. Tien
 {type:'slack', channel:'#<canal>', match:{kind:'keyword', keyword:'notify-<slug>'}}
 ```
 
-Instrucción de la routine: "Llegó un aviso de Claude Code. Confirmá que la línea `*agente:*` diga `` `notify-<slug>` `` (si no, ignorá el mensaje). Cada línea es `*<campo>:* <valor>`, con el valor entre backticks o como `<url|abrir>`: sacá `evento`, `tarea`, `sesión` y `rama`, buscá la tarea por `tarea` y seguí los pasos de 'Al recibir el aviso' del skill claude-code-task."
+Instrucción de la routine: "Llegó un aviso de Claude Code. Confirmá que la línea `*agente:*` diga `` `notify-<slug>` `` (si no, ignorá el mensaje). Cada línea es `• *<campo>:* <valor>`, con el valor entre backticks o como `<url|session_xxx>`: sacá `evento`, `tarea`, `sesión` y `rama`, buscá la tarea por `tarea` y seguí los pasos de 'Al recibir el aviso' del skill claude-code-task."
 
 ## Pasos (local)
 1. Prepará la carpeta: `git worktree add /workspace/cc/<repo>-<tarea> -b <tipo>/<tarea> origin/<base>` desde un clon del repo (o un clon nuevo en esa ruta).
@@ -64,7 +64,7 @@ Instrucción de la routine: "Llegó un aviso de Claude Code. Confirmá que la l�
 `claude --cloud "<tarea>"` desde la carpeta del repo crea una sesión que corre en la nube de Anthropic sobre la rama actual del remoto de GitHub (hacé push antes). Requiere GitHub conectado a la cuenta de Claude (`/web-setup` dentro de `claude`) y un environment configurado con el setup script de grokbot-claude-code (ver README del repo).
 
 - `.claude-notify` no viaja a la nube (no está commiteado). Usá un environment con `NOTIFY_AGENT=<slug>` en sus variables, o empezá la tarea con: "Primero creá `.claude-notify` en la raíz con `NOTIFY_AGENT=<slug>` y `NOTIFY_TASK=<tarea>` (no lo commitees)."
-- `*sesión:*` trae el link `<url|abrir>` (o el id si la variable de la nube no está). Para traerla de vuelta: `claude --teleport <id>`.
+- `*sesión:*` trae el link `<url|session_xxx>`: el texto del link es el id de sesión (si la variable de la nube no está, sale solo el id entre backticks). Para traerla de vuelta: `claude --teleport <id>`.
 - Las mismas reglas aplican.
 
 ## Al recibir el aviso

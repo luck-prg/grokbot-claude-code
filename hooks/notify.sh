@@ -3,19 +3,22 @@
 #
 # Lee el JSON del hook por stdin y publica en el canal de notificaciones un mensaje
 # Slack mrkdwn con un campo por línea (ver format_message):
-#   🤖 *Claude Code*
-#   *evento:* `Stop`
-#   *sesión:* <url|abrir>
-#   *repo:* `owner/name`
-#   *rama:* `x`
-#   *agente:* `notify-<agente>`
-#   *tarea:* `t`
+#   *Claude Code*
+#   • *evento:* `Stop`
+#   • *sesión:* <url|session_xxx>
+#   • *repo:* `owner/name`
+#   • *rama:* `x`
+#   • *agente:* `notify-<agente>`
+#   • *tarea:* `t`
 #
 # Nunca bloquea ni hace fallar a Claude: siempre sale con 0 y no escribe JSON en stdout.
 #
 # Variables (env o ~/.config/grokbot-claude-code/env):
 #   SLACK_NOTIFY_TOKEN    token xoxb- del bot (en la nube puede faltar: lo inyecta el proxy)
 #   SLACK_NOTIFY_CHANNEL  id del canal (#<canal>), p.ej. C0123456789
+#   SLACK_NOTIFY_USERNAME nombre con el que se publica (default "Claude Code")
+#   SLACK_NOTIFY_ICON_URL ícono con el que se publica (default el de la app de Claude)
+#                         Los dos necesitan el scope chat:write.customize; sin él Slack los ignora.
 #   NOTIFY_AGENT / NOTIFY_TASK  fallback si no hay archivo .claude-notify
 #   NOTIFY_SESSION_START=1      también avisa en SessionStart (apagado por defecto)
 #   DRY_RUN=1             imprime el payload en vez de mandarlo
@@ -28,6 +31,8 @@
 #                         a un servidor falso local, ver tests/test-scripts.sh). No tocar en uso real.
 
 SLACK_API_URL="${SLACK_API_URL:-https://slack.com/api/chat.postMessage}"
+DEFAULT_USERNAME="Claude Code"
+DEFAULT_ICON_URL="https://claude.ai/images/claude_app_icon.png"
 
 # Estado y log por usuario, nunca en un /tmp compartido.
 umask 077
@@ -173,29 +178,31 @@ repo_slug() {
 
 # format_message <evento> <detalle> <sesión> <agente> <tarea> <rama> <repo>
 # Arma el texto Slack mrkdwn (el campo "text" del POST). Sin LLM, determinístico.
-# Un campo por línea, `*<campo>:* <valor>`, con el valor en `código` o como <url|abrir>:
-#   🤖 *Claude Code*
-#   *evento:* `StopFailure` · `error=rate_limit`
-#   *sesión:* <https://claude.ai/code/abc|abrir>   (en local: `<session_id>`)
-#   *repo:* `o/n`
-#   *rama:* `x`
-#   *agente:* `notify-slug`
-#   *tarea:* `t`
+# Un campo por línea, `• *<campo>:* <valor>`, con el valor en `código` o como <url|id>:
+#   *Claude Code*
+#   • *evento:* `StopFailure` · `error=rate_limit`
+#   • *sesión:* <https://claude.ai/code/session_abc|session_abc>   (en local: `<session_id>`)
+#   • *repo:* `o/n`
+#   • *rama:* `x`
+#   • *agente:* `notify-slug`
+#   • *tarea:* `t`
 # Los campos vacíos (o `-`) se omiten con su línea. El único notify-<slug> real es el
 # del agente; el texto variable se neutraliza.
 format_message() {
   local event="$1" detail="$2" session="$3" agent="$4" task="$5" branch="$6" repo="$7"
-  local nl=$'\n' out url f name val
+  local nl=$'\n' b='• ' out url id f name val
 
-  out="🤖 *Claude Code*"
-  [ -n "$event" ] && out+="$nl*evento:* $(code_span "$event")${detail:+ · $(code_span "$detail")}"
+  out="*Claude Code*"
+  [ -n "$event" ] && out+="$nl$b*evento:* $(code_span "$event")${detail:+ · $(code_span "$detail")}"
   case "$session" in
     '' | '-') ;;
     https://*)
+      # El texto del link es el id de sesión (el último segmento de la URL).
       url=$(printf '%s' "$session" | tr -d '<>| `')
-      out+="$nl*sesión:* <$url|abrir>"
+      id="${url%/}" id="${id##*/}"
+      out+="$nl$b*sesión:* <$url|$(printf '%s' "${id:-$url}" | sed 's/&/\&amp;/g')>"
       ;;
-    *) out+="$nl*sesión:* $(code_span "$session")" ;;
+    *) out+="$nl$b*sesión:* $(code_span "$session")" ;;
   esac
 
   for f in "repo|$repo" "rama|$branch" "agente|$agent" "tarea|$task"; do
@@ -203,9 +210,9 @@ format_message() {
     case "$val" in '' | '-') continue ;; esac
     if [ "$name" = agente ]; then
       # Literal: es el keyword que matchea la routine (el slug ya viene saneado).
-      out+="$nl*agente:* \`notify-$val\`"
+      out+="$nl$b*agente:* \`notify-$val\`"
     else
-      out+="$nl*$name:* $(code_span "$val")"
+      out+="$nl$b*$name:* $(code_span "$val")"
     fi
   done
   printf '%s' "$out"
@@ -220,10 +227,13 @@ load_config() {
   [ -r "$cfg" ] || return 0
   # El env del proceso gana sobre el archivo.
   local tok="${SLACK_NOTIFY_TOKEN-}" chan="${SLACK_NOTIFY_CHANNEL-}"
+  local user="${SLACK_NOTIFY_USERNAME-}" icon="${SLACK_NOTIFY_ICON_URL-}"
   # shellcheck disable=SC1090
   . "$cfg" 2>/dev/null || true
   [ -n "$tok" ] && SLACK_NOTIFY_TOKEN="$tok"
   [ -n "$chan" ] && SLACK_NOTIFY_CHANNEL="$chan"
+  [ -n "$user" ] && SLACK_NOTIFY_USERNAME="$user"
+  [ -n "$icon" ] && SLACK_NOTIFY_ICON_URL="$icon"
   # Placeholders del instalador = sin configurar.
   case "${SLACK_NOTIFY_TOKEN:-}" in *REPLACE_ME*) SLACK_NOTIFY_TOKEN="" ;; esac
   return 0
@@ -270,7 +280,11 @@ send() {
   local text="$1" payload resp
   # Peor caso ≈ 2×4 s + 1 s: entra en el timeout de 10 s de SessionEnd.
   local curl_opts=(-sS --connect-timeout 3 --max-time 4 --retry 1 --retry-delay 1)
-  payload=$(printf '{"channel":%s,"text":%s}' "$(json_escape "$SLACK_NOTIFY_CHANNEL")" "$(json_escape "$text")")
+  # username/icon_url requieren el scope chat:write.customize; sin él Slack los ignora sin error.
+  payload=$(printf '{"channel":%s,"text":%s,"username":%s,"icon_url":%s}' \
+    "$(json_escape "$SLACK_NOTIFY_CHANNEL")" "$(json_escape "$text")" \
+    "$(json_escape "${SLACK_NOTIFY_USERNAME:-$DEFAULT_USERNAME}")" \
+    "$(json_escape "${SLACK_NOTIFY_ICON_URL:-$DEFAULT_ICON_URL}")")
   if [ "${DRY_RUN:-0}" = "1" ]; then
     printf 'DRY_RUN POST %s %s\n' "$SLACK_API_URL" "$payload"
     log "dry-run: $text"

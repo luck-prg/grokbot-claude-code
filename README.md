@@ -4,7 +4,7 @@ Notificaciones de Claude Code (local y nube) hacia agentes de Grok Bot vía Slac
 
 Los agentes de Grok Bot delegan código a Claude Code —en la computadora compartida o en la nube (claude.ai/code)— y se enteran cuando Claude termina o necesita input, **sin polling y sin un bot relay que gaste tokens**: hooks de Claude Code publican un mensaje en un canal privado de Slack y cada agente tiene una routine que despierta solo con su keyword.
 
-> **English summary.** Claude Code hooks (`Stop`, `StopFailure`, `Notification`, `PermissionRequest`, `SessionEnd`) post a short Slack mrkdwn message (one `*field:* value` per line, built deterministically in bash) to a private Slack channel using a dedicated `chat:write` bot token. Each Grok Bot agent has a routine with a Slack keyword trigger (`notify-<agent-slug>`), so only the right agent wakes up. A small wrapper (`local/notify-run`) covers what hooks can't (SIGKILL, OOM, crashes). Works locally (token in env/config file) and in claude.ai/code cloud environments (token injected by Anthropic's proxy as a network secret). Docs are in Spanish.
+> **English summary.** Claude Code hooks (`Stop`, `StopFailure`, `Notification`, `PermissionRequest`, `SessionEnd`) post a short Slack mrkdwn message (a `*Claude Code*` title, then one `• *field:* value` line per field, built deterministically in bash; posted as username "Claude Code" with the Claude icon) to a private Slack channel using a dedicated bot token (`chat:write`, plus `chat:write.customize` for the custom name/icon). Each Grok Bot agent has a routine with a Slack keyword trigger (`notify-<agent-slug>`), so only the right agent wakes up. A small wrapper (`local/notify-run`) covers what hooks can't (SIGKILL, OOM, crashes). Works locally (token in env/config file) and in claude.ai/code cloud environments (token injected by Anthropic's proxy as a network secret). Docs are in Spanish.
 
 ## Cómo funciona
 
@@ -13,32 +13,40 @@ flowchart LR
   A[Agente Grok Bot] -- "escribe BRIEF.md + .claude-notify<br/>lanza notify-run / claude --cloud" --> C[Claude Code<br/>local o nube]
   C -- "hooks: Stop, StopFailure,<br/>Notification, PermissionRequest, SessionEnd" --> N[notify.sh]
   W[notify-run] -. "ProcessExit si ningún hook avisó<br/>(SIGKILL, OOM, crash)" .-> N
-  N -- "chat.postMessage<br/>token chat:write" --> S[(Slack<br/>#<canal>)]
+  N -- "chat.postMessage<br/>token chat:write<br/>+ chat:write.customize" --> S[(Slack<br/>#<canal>)]
   S -- "routine: keyword notify-&lt;slug&gt;" --> A
 ```
 
 Mensaje publicado:
 
 ```
-🤖 *Claude Code*
-*evento:* `StopFailure` · `error=rate_limit`
-*sesión:* <https://claude.ai/code/session_abc|abrir>
-*repo:* `owner/name`
-*rama:* `feature/x`
-*agente:* `notify-dev-fe`
-*tarea:* `t`
+*Claude Code*
+• *evento:* `StopFailure` · `error=rate_limit`
+• *sesión:* <https://claude.ai/code/session_abc|session_abc>
+• *repo:* `owner/name`
+• *rama:* `feature/x`
+• *agente:* `notify-dev-fe`
+• *tarea:* `t`
 ```
 
 Se publica como un solo campo `text` (sin `blocks`), así el keyword `notify-<slug>` queda en el texto que matchea la routine. Un campo por línea, el mismo texto sirve para personas, scripts y agentes:
 
-- **Título:** siempre `🤖 *Claude Code*`.
+- **Título:** siempre `*Claude Code*` (sin emoji ni viñeta). Cada línea de campo empieza con `• ` (U+2022 + espacio).
 - **`evento`:** siempre. Si hay detalle va en un segundo span en la misma línea: `error=rate_limit` (StopFailure), `type=permission_prompt` (Notification), `tool=Bash` (PermissionRequest), `reason=other` (SessionEnd), `exit=137` (ProcessExit).
-- **`sesión`:** link `<url|abrir>` en la nube; el `session_id` en código (`` `id` ``) en local.
+- **`sesión`:** en la nube, link a la sesión cuyo texto es el id: `<https://claude.ai/code/session_xxx|session_xxx>`; en local, el `session_id` en código (`` `id` ``).
 - **`repo`:** `owner/name` del `git remote get-url origin` (soporta https y ssh, quita `.git` y nunca muestra credenciales ni host).
 - **`rama`**, **`agente`** (`notify-<slug>`, el keyword de la routine) y **`tarea`**.
 - Los campos vacíos o `-` se omiten con su línea (p.ej. sin remote no hay `*repo:*`).
 
-**Cómo parsearlo:** cada línea después del título es `*<campo>:* <valor>` (regex `^\*([^*]+):\* (.*)$`); el valor va entre backticks o, en `sesión` en la nube, como `<url|abrir>` (la URL es lo que está entre `<` y `|`). La routine identifica al agente por la línea `*agente:*` `` `notify-<slug>` ``.
+**Cómo parsearlo:** cada línea después del título es `• *<campo>:* <valor>` (regex `^• \*([^*]+):\* (.*)$`); el valor va entre backticks o, en `sesión` en la nube, como `<url|session_xxx>` (la URL es lo que está entre `<` y `|`; el texto del link, entre `|` y `>`, es el id de sesión). La routine identifica al agente por la línea `*agente:*` `` `notify-<slug>` ``.
+
+**Payload de `chat.postMessage`** (ejemplo con los defaults):
+
+```json
+{"channel":"C0123456789","text":"*Claude Code*\n• *evento:* `Stop`\n• *sesión:* `s1`\n• *agente:* `notify-dev-fe`","username":"Claude Code","icon_url":"https://claude.ai/images/claude_app_icon.png"}
+```
+
+`username` (default `Claude Code`, se cambia con `SLACK_NOTIFY_USERNAME`) e `icon_url` (default `https://claude.ai/images/claude_app_icon.png`, se cambia con `SLACK_NOTIFY_ICON_URL`) van siempre, con y sin `jq`. Para que Slack los use, el bot necesita el scope **`chat:write.customize`**; sin él Slack los ignora **sin dar error** y el mensaje sale con el nombre e ícono de la app.
 
 **A quién avisar:** archivo `.claude-notify` en la carpeta de trabajo o en la raíz del repo/worktree, escrito por el agente al lanzar la tarea:
 
@@ -77,7 +85,7 @@ El único `notify-` real del mensaje es el keyword de la línea `*agente:*`: en 
 ### 1. Slack
 
 1. Creá un canal **privado** `#<canal>` y anotá su channel id (`C0123456789`; en Slack: detalles del canal → abajo de todo).
-2. Creá una Slack app dedicada (https://api.slack.com/apps → *From scratch*). En *OAuth & Permissions* agregá **solo** el bot scope `chat:write`. Instalala en el workspace y copiá el *Bot User OAuth Token* (`xoxb-...`).
+2. Creá una Slack app dedicada (https://api.slack.com/apps → *From scratch*). En *OAuth & Permissions* agregá **solo** los bot scopes `chat:write` y `chat:write.customize` (este último para que el mensaje salga como "Claude Code" con el ícono de Claude; sin él Slack ignora `username`/`icon_url` sin dar error). Instalala en el workspace y copiá el *Bot User OAuth Token* (`xoxb-...`).
 3. En `#<canal>`: `/invite @<tu-app>` y `/invite @Cursor` (la app que dispara las routines de Grok Bot tiene que ver los mensajes del canal). No invites el bot de notificaciones a ningún otro canal.
 
 El token solo puede escribir en canales donde el bot es miembro, así que si se filtra el daño queda acotado a ese canal. Igual, tratalo como secreto: nunca en el repo.
@@ -94,7 +102,7 @@ $EDITOR ~/.config/grokbot-claude-code/env   # SLACK_NOTIFY_TOKEN=xoxb-... y SLAC
 
 `notify-run` queda en `~/.local/bin` (o en `BIN_DIR`). Si `command -v notify-run` no lo encuentra, agregá `export PATH="$HOME/.local/bin:$PATH"` a tu shell o usá la ruta completa. Correr el instalador de nuevo es seguro (no duplica hooks ni pisa el env). Para desinstalar: `bash ~/grokbot-claude-code/local/install.sh --uninstall`.
 
-Las variables `SLACK_NOTIFY_TOKEN` / `SLACK_NOTIFY_CHANNEL` del entorno ganan sobre el archivo. El hook envía el token por un descriptor de archivo, no por la línea de comandos (no aparece en `ps`).
+Opcionales en el mismo archivo o en el entorno: `SLACK_NOTIFY_USERNAME` y `SLACK_NOTIFY_ICON_URL` (ver el payload arriba). Las variables `SLACK_NOTIFY_TOKEN` / `SLACK_NOTIFY_CHANNEL` / `SLACK_NOTIFY_USERNAME` / `SLACK_NOTIFY_ICON_URL` del entorno ganan sobre el archivo. El hook envía el token por un descriptor de archivo, no por la línea de comandos (no aparece en `ps`).
 
 Probar sin red (en una carpeta temporal, para no dejar un `.claude-notify` suelto en `/tmp`):
 
@@ -193,7 +201,7 @@ Configurá las notificaciones de Claude Code para vos, con el flujo por agente d
 2. Preguntame el nombre del canal de avisos (#<canal>) y su channel id (estilo C0123456789), y confirmá conmigo tu slug (proponé uno: <slug>). Preguntame qué notify-... ya se usan en el canal.
 3. Chequeá tu slug contra los ya usados con: bash ~/grokbot-claude-code/local/check-slugs <slug> <slug-ya-usado> ... Si sale 1 (colisión por substring, p.ej. notify-dev vs notify-dev-ml), proponé otro.
 4. Verificá que ~/.config/grokbot-claude-code/env tenga modo 600 y SLACK_NOTIFY_CHANNEL con el id que te di. Si SLACK_NOTIFY_TOKEN sigue en xoxb-REPLACE_ME, pedímelo por un canal seguro; no lo escribas en ningún repo ni mensaje.
-5. Creá tu routine con trigger {type:'slack', channel:'#<canal>', match:{kind:'keyword', keyword:'notify-<slug>'}} con la instrucción de la skill (confirma la línea *agente:* y lee los campos *<campo>:* del aviso) y guardá en tu memoria slug, keyword y canal (NOTIFY_AGENT=<slug> al lanzar tareas).
+5. Creá tu routine con trigger {type:'slack', channel:'#<canal>', match:{kind:'keyword', keyword:'notify-<slug>'}} con la instrucción de la skill (confirma la línea *agente:* y lee los campos • *<campo>:* del aviso) y guardá en tu memoria slug, keyword y canal (NOTIFY_AGENT=<slug> al lanzar tareas).
 6. Reemplazá tu skill claude-code-task por ~/grokbot-claude-code/skill/claude-code-task/SKILL.md.
 7. Hacé UNA sola prueba con el bot de notificaciones (vía el hook, como dice la skill) y reportame keyword, canal y si tu routine disparó. Si no, revisá ${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log.
 No hagas polling, no mergees, no hagas push de nada en este repo.
