@@ -2,6 +2,7 @@
 # Simula eventos de Claude Code contra hooks/notify.sh en DRY_RUN (sin red).
 # Uso: bash tests/simulate.sh   — sale ≠0 si falla algún caso.
 
+# shellcheck disable=SC2016 # los backticks de los mensajes esperados son literales de mrkdwn
 set -u
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -31,6 +32,9 @@ printf 'NOTIFY_AGENT=agente-x\nNOTIFY_TASK=tarea-1\n' >"$proj/.claude-notify"
 
 reset_state() { rm -rf "$NOTIFY_STATE_DIR"; }
 run_hook() { printf '%s' "$1" | bash "$hook"; }
+# text_of <salida DRY_RUN>: el campo text del payload (mensaje Slack, multilínea).
+text_of() { printf '%s' "$1" | sed -n 's/^DRY_RUN POST [^ ]* //p' | jq -r .text 2>/dev/null; }
+nl=$'\n'
 
 ev() { # ev <evento> <session> [campos extra JSON] [cwd]
   printf '{"session_id":"%s","transcript_path":"/tmp/t.jsonl","cwd":"%s","hook_event_name":"%s"%s}' \
@@ -40,8 +44,11 @@ ev() { # ev <evento> <session> [campos extra JSON] [cwd]
 # 1. Evento del agente principal envía, con formato correcto.
 reset_state
 out=$(run_hook "$(ev Stop s1 '"stop_hook_active":false,"last_assistant_message":"Listo: tests \"verdes\".\nVer STATUS.md"')")
-expected='[claude] notify-agente-x event=Stop task=tarea-1 session=s1 branch=feature/demo summary=Listo: tests "verdes". Ver STATUS.md'
-got=$(printf '%s' "$out" | sed -n 's/^DRY_RUN POST [^ ]* //p' | jq -r .text 2>/dev/null)
+expected='🤖 *Claude Code* · `Stop` · `s1`
+rama `feature/demo` · agente `notify-agente-x` · tarea `tarea-1`
+> Listo: tests "verdes". Ver STATUS.md
+notify-agente-x event=Stop task=tarea-1 session=s1 branch=feature/demo'
+got=$(text_of "$out")
 chan=$(printf '%s' "$out" | sed -n 's/^DRY_RUN POST [^ ]* //p' | jq -r .channel 2>/dev/null)
 if [ "$got" = "$expected" ] && [ "$chan" = "C0123456789" ]; then ok "Stop principal envía"; else ko "Stop principal envía" "got: $out"; fi
 
@@ -74,7 +81,7 @@ for nojq in 0 1; do
   reset_state
   printf '%s' "$(ev Stop s3d "$bg")" | NOTIFY_NO_JQ=$nojq bash "$hook" >/dev/null
   out3=$(printf '%s' "$(ev SessionEnd s3d '"reason":"other"')" | NOTIFY_NO_JQ=$nojq bash "$hook")
-  if [ -z "$out1" ] && printf '%s' "$out2" | grep -q 'summary=listo' && printf '%s' "$out3" | grep -q 'event=SessionEnd'; then
+  if [ -z "$out1" ] && printf '%s' "$(text_of "$out2")" | grep -qx '> listo' && printf '%s' "$out3" | grep -q 'event=SessionEnd'; then
     ok "Stop en pausa no avisa (NOTIFY_NO_JQ=$nojq)"
   else
     ko "Stop en pausa (NOTIFY_NO_JQ=$nojq)" "bg=[$out1] fin=[$out2] end=[$out3]"
@@ -131,7 +138,7 @@ reset_state
 out1=$(run_hook "$(ev PermissionRequest s6 '"tool_name":"Bash","tool_input":{"command":"rm -rf build","description":"x"}')")
 out2=$(run_hook "$(ev Notification s6 '"message":"Claude needs your permission to use Bash","notification_type":"permission_prompt"')")
 out3=$(run_hook "$(ev Notification s6 '"message":"MCP pide datos","notification_type":"elicitation_dialog"')")
-if printf '%s' "$out1" | grep -q 'event=PermissionRequest tool=Bash .*summary=Bash"' &&
+if printf '%s' "$(text_of "$out1")" | grep -q 'event=PermissionRequest tool=Bash task=.*' && printf '%s' "$(text_of "$out1")" | grep -qx '> Bash' &&
   ! printf '%s' "$out1" | grep -q 'rm -rf' && [ -z "$out2" ] && printf '%s' "$out3" | grep -q 'event=Notification type=elicitation_dialog'; then
   ok "PermissionRequest + Notification dedup"
 else
@@ -142,7 +149,7 @@ fi
 for nojq in 0 1; do
   reset_state
   out=$(printf '%s' "$(ev PermissionRequest s6b '"tool_name":"Bash","tool_input":{"command":"curl -H \"Authorization: Bearer xoxb-REPLACE_ME\" x","file_path":"/secreto"}')" | NOTIFY_NO_JQ=$nojq bash "$hook")
-  if printf '%s' "$out" | grep -q 'tool=Bash .*summary=Bash"' && ! printf '%s' "$out" | grep -Eq 'REPLACE_ME|curl|secreto'; then
+  if printf '%s' "$out" | grep -q 'tool=Bash task=' && printf '%s' "$(text_of "$out")" | grep -qx '> Bash' && ! printf '%s' "$out" | grep -Eq 'REPLACE_ME|curl|secreto'; then
     ok "PermissionRequest sin tool_input (NOTIFY_NO_JQ=$nojq)"
   else
     ko "PermissionRequest sin tool_input (NOTIFY_NO_JQ=$nojq)" "$out"
@@ -158,8 +165,11 @@ for nojq in 0 1; do
   reset_state
   out=$(printf '%s' "$(ev Stop s6c '"last_assistant_message":"avisale a notify-otro y NOTIFY-dev <!channel> <!here> <@U0123456789> <#C0123456789|x> a&b"' "$evil")" | NOTIFY_NO_JQ=$nojq bash "$hook")
   got=$(printf '%s' "$out" | sed -n 's/^DRY_RUN POST [^ ]* //p' | jq -r .text 2>/dev/null)
-  expected='[claude] notify-agente-x event=Stop task=notify‐tarea session=s6c branch=notify‐rama summary=avisale a notify‐otro y NOTIFY‐dev &lt;!channel&gt; &lt;!here&gt; &lt;@U0123456789&gt; &lt;#C0123456789|x&gt; a&amp;b'
-  if [ "$got" = "$expected" ] && [ "$(printf '%s' "$got" | grep -oi 'notify-' | wc -l)" = 1 ]; then
+  expected='🤖 *Claude Code* · `Stop` · `s6c`
+rama `notify‐rama` · agente `notify-agente-x` · tarea `notify‐tarea`
+> avisale a notify‐otro y NOTIFY‐dev &lt;!channel&gt; &lt;!here&gt; &lt;@U0123456789&gt; &lt;#C0123456789|x&gt; a&amp;b
+notify-agente-x event=Stop task=notify‐tarea session=s6c branch=notify‐rama'
+  if [ "$got" = "$expected" ] && [ "$(printf '%s' "$got" | grep -oi 'notify-' | wc -l)" = 2 ]; then
     ok "texto libre neutralizado (NOTIFY_NO_JQ=$nojq)"
   else
     ko "texto libre neutralizado (NOTIFY_NO_JQ=$nojq)" "got: $got"
@@ -169,7 +179,7 @@ done
 # 7. StopFailure lleva el tipo de error.
 reset_state
 out=$(run_hook "$(ev StopFailure s7 '"error":"rate_limit","last_assistant_message":"API Error: Rate limit reached"')")
-if printf '%s' "$out" | grep -q 'event=StopFailure error=rate_limit .*summary=API Error: Rate limit reached'; then ok "StopFailure"; else ko "StopFailure" "$out"; fi
+if printf '%s' "$out" | grep -q 'event=StopFailure error=rate_limit task=' && printf '%s' "$(text_of "$out")" | grep -qx '> API Error: Rate limit reached'; then ok "StopFailure"; else ko "StopFailure" "$out"; fi
 
 # 8. SessionStart apagado por defecto, prendido con NOTIFY_SESSION_START=1.
 reset_state
@@ -293,6 +303,123 @@ if [ -x "$ihome/bin/notify-run" ] && [ -x "$ihome/.claude/hooks/grokbot-notify.s
   ok "local/install.sh instala y mergea (idempotente)"
 else
   ko "local/install.sh" "$(cat "$s" 2>/dev/null)"
+fi
+
+# 13. Formato del mensaje: pares exactos y casos borde (jq y sed deben coincidir).
+fmt_repo="$work/fmt"
+mkdir -p "$fmt_repo"
+git -C "$fmt_repo" init -q -b feature/x
+printf 'NOTIFY_AGENT=dev-fe\nNOTIFY_TASK=t\n' >"$fmt_repo/.claude-notify"
+fmt() { # fmt <nojq> <evento> <session> [extra JSON] [cwd] — texto del mensaje (env extra por variables)
+  reset_state
+  text_of "$(printf '%s' "$(ev "$2" "$3" "${4:-}" "${5:-$fmt_repo}")" | NOTIFY_NO_JQ=$1 bash "$hook")"
+}
+set_remote() { git -C "$fmt_repo" remote remove origin 2>/dev/null; [ -z "${1:-}" ] || git -C "$fmt_repo" remote add origin "$1"; }
+
+# 13a. Nube (URL de sesión) con remote https con credenciales y detalle de evento: salida exacta.
+set_remote 'https://user:ghp_SECRETTOKEN@github.com/acme/app.git'
+for nojq in 0 1; do
+  reset_state
+  got=$(printf '%s' "$(ev StopFailure s13 '"error":"rate_limit","last_assistant_message":"Se cortó por límite"' "$fmt_repo")" |
+    CLAUDE_CODE_REMOTE=true CLAUDE_CODE_REMOTE_SESSION_ID=session_abc NOTIFY_NO_JQ=$nojq bash "$hook")
+  got=$(text_of "$got")
+  expected='🤖 *Claude Code* · `StopFailure` · `error=rate_limit` · <https://claude.ai/code/session_abc|sesión>
+repo `acme/app` · rama `feature/x` · agente `notify-dev-fe` · tarea `t`
+> Se cortó por límite
+notify-dev-fe event=StopFailure error=rate_limit task=t session=https://claude.ai/code/session_abc branch=feature/x'
+  if [ "$got" = "$expected" ] && ! printf '%s' "$got" | grep -Eq 'SECRET|ghp_|user'; then
+    ok "formato exacto en la nube, sin credenciales (NOTIFY_NO_JQ=$nojq)"
+  else
+    ko "formato exacto en la nube (NOTIFY_NO_JQ=$nojq)" "got: $got"
+  fi
+done
+
+# 13b. Remotes: https, ssh scp-like, ssh://, sin .git, sin remote, ruta local (no se muestra).
+for case in 'https://github.com/o/n.git|o/n' 'git@github.com:o/n.git|o/n' 'ssh://git@host.com:2222/o/n|o/n' \
+  'https://tok@gitlab.com/g/sub/n.git|sub/n' '/srv/git/local.git|' ''; do
+  set_remote "${case%%|*}"
+  got=$(fmt 0 Stop s13b '"last_assistant_message":"x"')
+  line2=$(printf '%s' "$got" | sed -n 2p)
+  want=${case#*|}
+  [ "$case" = "" ] && want=""
+  if [ -n "$want" ]; then pat="^repo \`$want\` · rama"; else pat="^rama \`feature/x\` · agente"; fi
+  if printf '%s' "$line2" | grep -q "$pat" && ! printf '%s' "$got" | grep -Eq 'tok|/srv|github.com|host.com'; then
+    ok "remote '${case%%|*}' → '${want:-(omitido)}'"
+  else
+    ko "remote '${case%%|*}'" "line2: $line2"
+  fi
+done
+
+# 13c. Campos vacíos: sin remote, sin tarea, sin resumen, sin nube → línea 2 sin huecos y sin línea de resumen.
+set_remote ''
+nt="$work/notask"
+mkdir -p "$nt"
+printf 'NOTIFY_AGENT=dev-fe\n' >"$nt/.claude-notify"
+for nojq in 0 1; do
+  got=$(fmt $nojq SessionEnd s13c '"reason":"other"' "$nt")
+  expected='🤖 *Claude Code* · `SessionEnd` · `reason=other` · `s13c`
+agente `notify-dev-fe`
+notify-dev-fe event=SessionEnd reason=other task=- session=s13c branch=-'
+  if [ "$got" = "$expected" ]; then ok "campos vacíos omitidos (NOTIFY_NO_JQ=$nojq)"; else ko "campos vacíos (NOTIFY_NO_JQ=$nojq)" "got: $got"; fi
+done
+
+# 13d. Resumen largo: recorte a 140 caracteres + … (U+2026), sin partir UTF-8; jq y sed iguales.
+long=$(printf 'á%.0s' $(seq 1 300))
+for nojq in 0 1; do
+  got=$(fmt $nojq Stop s13d "\"last_assistant_message\":\"$long\"")
+  sum=$(printf '%s' "$got" | sed -n 's/^> //p')
+  expected_sum="$(printf 'á%.0s' $(seq 1 140))…"
+  if [ "$sum" = "$expected_sum" ] && printf '%s' "$got" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 &&
+    ! printf '%s' "$got" | grep -q '\.\.\.'; then
+    ok "resumen largo recortado a 140 + … (NOTIFY_NO_JQ=$nojq)"
+  else
+    ko "resumen largo (NOTIFY_NO_JQ=$nojq)" "got: $sum"
+  fi
+done
+# Sin locale UTF-8 disponible también debe quedar UTF-8 válido.
+reset_state
+got=$(printf '%s' "$(ev Stop s13e "\"last_assistant_message\":\"$long\"" "$fmt_repo")" | LC_ALL=C bash -c 'PATH=$PATH; bash "$0"' "$hook")
+if printf '%s' "$(text_of "$got")" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then ok "recorte con LC_ALL=C es UTF-8 válido"; else ko "recorte con LC_ALL=C" "$got"; fi
+
+# 13e. Resumen corto exacto (≤140) no se recorta ni lleva …
+got=$(fmt 0 Stop s13f '"last_assistant_message":"corto"')
+if printf '%s' "$got" | grep -qx '> corto'; then ok "resumen corto sin …"; else ko "resumen corto" "$got"; fi
+
+# 13f. Caracteres especiales en resumen/tarea: & < > <!channel> y notify-otro, jq y sed.
+git -C "$fmt_repo" symbolic-ref HEAD 'refs/heads/x&y<z>'
+for nojq in 0 1; do
+  got=$(fmt $nojq Stop s13g '"last_assistant_message":"<!channel> a&b <x> notify-otro NOTIFY-dev"')
+  expected='🤖 *Claude Code* · `Stop` · `s13g`
+rama `x&amp;y&lt;z&gt;` · agente `notify-dev-fe` · tarea `t`
+> &lt;!channel&gt; a&amp;b &lt;x&gt; notify‐otro NOTIFY‐dev
+notify-dev-fe event=Stop task=t session=s13g branch=x&amp;y&lt;z&gt;'
+  if [ "$got" = "$expected" ] && ! printf '%s' "$got" | grep -q '<!channel>'; then
+    ok "caracteres especiales escapados y notify- neutralizado (NOTIFY_NO_JQ=$nojq)"
+  else
+    ko "caracteres especiales (NOTIFY_NO_JQ=$nojq)" "got: $got"
+  fi
+done
+
+# 13g. Backticks en rama/tarea no rompen el code span; el payload es JSON válido (jq y sed).
+git -C "$fmt_repo" symbolic-ref HEAD 'refs/heads/feat/a`b'
+for nojq in 0 1; do
+  reset_state
+  out=$(printf '%s' "$(ev Stop s13h '"last_assistant_message":"ok"' "$fmt_repo")" | NOTIFY_NO_JQ=$nojq bash "$hook")
+  if printf '%s' "$out" | sed 's/^DRY_RUN POST [^ ]* //' | jq -e .text >/dev/null 2>&1 &&
+    printf '%s' "$(text_of "$out")" | sed -n 2p | grep -q 'rama `feat/ab` ·'; then
+    ok "backtick en rama no rompe el span (NOTIFY_NO_JQ=$nojq)"
+  else
+    ko "backtick en rama (NOTIFY_NO_JQ=$nojq)" "$out"
+  fi
+done
+git -C "$fmt_repo" symbolic-ref HEAD refs/heads/feature/x
+
+# 13h. format_message se puede cargar con source sin ejecutar el hook.
+fm=$(bash -c 'source "$1"; format_message Stop "" "hola" s1 ag "" rama o/n' _ "$hook")
+if [ "$fm" = "🤖 *Claude Code* · \`Stop\` · \`s1\`${nl}repo \`o/n\` · rama \`rama\` · agente \`notify-ag\`${nl}> hola${nl}notify-ag event=Stop task=- session=s1 branch=rama" ]; then
+  ok "format_message testeable con source"
+else
+  ko "format_message con source" "$fm"
 fi
 
 echo

@@ -25,8 +25,12 @@ cat >"$hook" <<'GROKBOT_NOTIFY_SH_EOF'
 #!/usr/bin/env bash
 # grokbot-claude-code: hook de Claude Code que avisa en Slack a un agente de Grok Bot.
 #
-# Lee el JSON del hook por stdin y publica en el canal de notificaciones:
-#   [claude] notify-<agente> event=<evento> task=<tarea> session=<id|url> branch=<rama> summary=<resumen>
+# Lee el JSON del hook por stdin y publica en el canal de notificaciones un mensaje
+# Slack mrkdwn de 3-4 líneas (ver format_message):
+#   🤖 *Claude Code* · `Stop` · <url|sesión>
+#   repo `owner/name` · rama `x` · agente `notify-<agente>` · tarea `t`
+#   > resumen de una línea…
+#   notify-<agente> event=Stop task=t session=<id|url> branch=x
 #
 # Nunca bloquea ni hace fallar a Claude: siempre sale con 0 y no escribe JSON en stdout.
 #
@@ -43,7 +47,7 @@ cat >"$hook" <<'GROKBOT_NOTIFY_SH_EOF'
 #   NOTIFY_RUN_ID         lo pone local/notify-run para saber si algún hook ya avisó
 
 SLACK_API_URL="https://slack.com/api/chat.postMessage"
-SUMMARY_MAX=200
+SUMMARY_MAX=140
 
 # Estado y log por usuario, nunca en un /tmp compartido.
 umask 077
@@ -124,15 +128,28 @@ json_escape() {
     printf '%s' "$1" | jq -Rs . 2>/dev/null
     return 0
   fi
-  printf '"%s"' "$(printf '%s' "$1" | tr '\n\r\t' '   ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+  # Los saltos de línea se conservan como \n (el mensaje es multilínea); otros controles se descartan.
+  printf '"%s"' "$(printf '%s' "$1" | tr '\t\r' '  ' | tr -d '\000-\010\013\014\016-\037' |
+    sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' |
+    awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
 }
 
-# Una línea, sin espacios repetidos, recortada.
+# Una línea, sin espacios repetidos, recortada a <max> caracteres (default SUMMARY_MAX) + "…".
+# El recorte cuenta caracteres UTF-8, no bytes, y nunca parte un carácter multibyte.
 oneline() {
-  local s
+  local s max="${2:-$SUMMARY_MAX}" l probe="é"
   s=$(printf '%s' "$1" | tr '\n\r\t' '   ' | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')
-  if [ "${#s}" -gt "$SUMMARY_MAX" ]; then
-    s="${s:0:$SUMMARY_MAX}..."
+  for l in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+    ( LC_ALL=$l; [ "${#probe}" = 1 ] ) 2>/dev/null || continue
+    (
+      LC_ALL=$l
+      if [ "${#s}" -gt "$max" ]; then printf '%s…' "${s:0:$max}"; else printf '%s' "$s"; fi
+    )
+    return 0
+  done
+  # Sin locale UTF-8: se corta por bytes y iconv descarta el multibyte partido.
+  if [ "${#s}" -gt "$max" ]; then
+    s="$(printf '%s' "${s:0:$max}" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null)…"
   fi
   printf '%s' "$s"
 }
@@ -142,6 +159,74 @@ oneline() {
 neutralize() {
   printf '%s' "$1" | sed -e 's/\([Nn][Oo][Tt][Ii][Ff][Yy]\)-/\1‐/g' \
     -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# code_span <texto>: `texto` para Slack, neutralizado y sin backticks que rompan el span.
+code_span() {
+  # shellcheck disable=SC2016 # los backticks son literales de mrkdwn
+  printf '`%s`' "$(neutralize "$(printf '%s' "$1" | tr -d '`')")"
+}
+
+# repo_slug <url>: owner/name de un remote git (https, ssh://, scp-like git@host:o/n.git).
+# Descarta credenciales (user:token@) y el host; vacío si no es un remote de red.
+repo_slug() {
+  local u="$1" path
+  case "$u" in
+    *://*)
+      case "$u" in file://*) return 0 ;; esac
+      u="${u#*://}"
+      u=$(printf '%s' "$u" | sed -E 's#^[^/]*@##') # userinfo (el último @ del authority)
+      path="${u#*/}"
+      [ "$path" != "$u" ] || return 0
+      ;;
+    *:*)
+      case "$u" in /* | ./* | ../*) return 0 ;; esac
+      u=$(printf '%s' "$u" | sed -E 's#^[^/:]*@##') # git@host:o/n
+      path="${u#*:}"
+      ;;
+    *) return 0 ;;
+  esac
+  path=$(printf '%s' "$path" | sed -E -e 's#[?\#].*$##' -e 's#/+$##' -e 's#\.git$##')
+  # Últimos dos componentes (owner/name), incluso con subgrupos de GitLab.
+  printf '%s' "$path" | awk -F/ 'NF >= 2 { print $(NF-1) "/" $NF }'
+}
+
+# format_message <evento> <detalle> <resumen> <sesión> <agente> <tarea> <rama> <repo>
+# Arma el texto Slack mrkdwn (el campo "text" del POST). Sin LLM, determinístico:
+#   🤖 *Claude Code* · `Stop` · <https://claude.ai/code/abc|sesión>
+#   repo `o/n` · rama `x` · agente `notify-slug` · tarea `t`
+#   > resumen
+#   notify-slug event=Stop task=t session=<id|url> branch=x
+# El único notify-<slug> real es el del agente (líneas 2 y 4); el texto variable se neutraliza.
+format_message() {
+  local event="$1" detail="$2" summary="$3" session="$4" agent="$5" task="$6" branch="$7" repo="$8"
+  local nl=$'\n' out sess url fields="" f
+
+  case "$session" in
+    https://*)
+      url=$(printf '%s' "$session" | tr -d '<>| `')
+      sess="<$url|sesión>"
+      ;;
+    *) sess=$(code_span "$session") ;;
+  esac
+  out="🤖 *Claude Code* · $(code_span "$event")${detail:+ · $(code_span "$detail")} · $sess"
+
+  for f in "repo|$repo" "rama|$branch" "agente|${agent:+notify-$agent}" "tarea|$task"; do
+    case "${f#*|}" in '' | '-') continue ;; esac
+    if [ "${f%%|*}" = agente ]; then
+      # Literal: es el keyword que matchea la routine.
+      fields+="${fields:+ · }agente \`${f#*|}\`"
+    else
+      fields+="${fields:+ · }${f%%|*} $(code_span "${f#*|}")"
+    fi
+  done
+  [ -n "$fields" ] && out+="$nl$fields"
+
+  summary=$(oneline "$summary")
+  case "$summary" in '' | '-') ;; *) out+="$nl> $(neutralize "$summary")" ;; esac
+
+  out+="$nl""notify-$agent $(neutralize "event=$event${detail:+ $detail} task=${task:--} session=$session branch=${branch:--}" | tr -d '`')"
+  printf '%s' "$out"
 }
 
 slug() {
@@ -227,7 +312,7 @@ send() {
   case "$resp" in
     *'"ok":true'*) log "enviado: $text" ;;
     *)
-      log "fallo al enviar ($(oneline "$resp")): $text"
+      log "fallo al enviar ($(oneline "$resp" 200)): $text"
       return 1
       ;;
   esac
@@ -342,16 +427,16 @@ main() {
     return 0
   fi
 
-  local session="$SESSION_ID" branch text
+  local session="$SESSION_ID" branch text repo
   if [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] && [ -n "${CLAUDE_CODE_REMOTE_SESSION_ID:-}" ]; then
-    session="https://claude.ai/code/${CLAUDE_CODE_REMOTE_SESSION_ID}"
+    session="https://claude.ai/code/$(slug "$CLAUDE_CODE_REMOTE_SESSION_ID")"
   fi
   branch=$(git -C "$cwd" symbolic-ref --short -q HEAD 2>/dev/null ||
     git -C "$cwd" rev-parse --short HEAD 2>/dev/null) || branch="-"
   [ -n "$branch" ] || branch="-"
+  repo=$(repo_slug "$(git -C "$cwd" remote get-url origin 2>/dev/null)")
 
-  # El único notify- real es el keyword del principio; el resto se neutraliza.
-  text="[claude] notify-$AGENT $(neutralize "event=$event${detail:+ $detail} task=$TASK session=$session branch=$branch summary=$(oneline "${summary:--}")")"
+  text=$(format_message "$event" "$detail" "$summary" "$session" "$AGENT" "$TASK" "$branch" "$repo")
 
   # Las marcas de dedup van después de un envío exitoso: si falla, el próximo evento reintenta.
   send "$text" || return 0
@@ -361,8 +446,11 @@ main() {
   fi
 }
 
-main "$@" || true
-exit 0
+# Con `source` solo define las funciones (los tests llaman a format_message).
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@" || true
+  exit 0
+fi
 GROKBOT_NOTIFY_SH_EOF
 chmod 755 "$hook"
 
