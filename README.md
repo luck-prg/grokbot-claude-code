@@ -55,7 +55,7 @@ El único `notify-` real del mensaje es el keyword del principio: en el resto (r
 | `tests/lint-skills.sh` | Frontmatter de las skills, rutas del repo citadas, placeholders y canal sin hardcodear. |
 | `tests/secret-scan.sh` | Busca tokens/ids con pinta de reales en los archivos del repo. |
 | `tests/run-all.sh` | Corre todos los tests y resume. |
-| `.github/workflows/test.yml` | CI: `shellcheck` + `bash tests/run-all.sh` en cada PR y push a `main`. |
+| `ci/github-workflow-test.yml` | CI: `shellcheck` + `bash tests/run-all.sh` en cada PR y push a `main`. Movelo a .github/workflows/test.yml para activarlo. |
 
 ## Setup
 
@@ -69,24 +69,27 @@ El token solo puede escribir en canales donde el bot es miembro, así que si se 
 
 ### 2. Local (computadora compartida)
 
+Requisitos: `git`, `bash`, `curl` y **`jq`** (en la práctica obligatorio: `local/install.sh` lo usa para mergear los hooks y el hook para parsear el JSON; el fallback sin `jq` cubre los casos de los tests, pero no es un parser JSON completo). `python3` solo para los tests.
+
 ```bash
-git clone <este-repo> ~/grokbot-claude-code
-bash ~/grokbot-claude-code/local/install.sh
-chmod 600 ~/.config/grokbot-claude-code/env
+git clone https://github.com/luck-prg/grokbot-claude-code ~/grokbot-claude-code
+bash ~/grokbot-claude-code/local/install.sh          # deja el env en modo 600
 $EDITOR ~/.config/grokbot-claude-code/env   # SLACK_NOTIFY_TOKEN=xoxb-... y SLACK_NOTIFY_CHANNEL=C...
 ```
 
-**`jq` es en la práctica obligatorio**: `local/install.sh` lo usa para mergear los hooks y el hook lo usa para parsear el JSON. El fallback sin `jq` cubre los casos de los tests, pero no es un parser JSON completo.
+`notify-run` queda en `~/.local/bin` (o en `BIN_DIR`). Si `command -v notify-run` no lo encuentra, agregá `export PATH="$HOME/.local/bin:$PATH"` a tu shell o usá la ruta completa. Correr el instalador de nuevo es seguro (no duplica hooks ni pisa el env). Para desinstalar: `bash ~/grokbot-claude-code/local/install.sh --uninstall`.
 
 Las variables `SLACK_NOTIFY_TOKEN` / `SLACK_NOTIFY_CHANNEL` del entorno ganan sobre el archivo. El hook envía el token por un descriptor de archivo, no por la línea de comandos (no aparece en `ps`).
 
-Probar sin red:
+Probar sin red (en una carpeta temporal, para no dejar un `.claude-notify` suelto en `/tmp`):
 
 ```bash
-cd /tmp && printf 'NOTIFY_AGENT=prueba\nNOTIFY_TASK=demo\n' > .claude-notify
-echo '{"session_id":"s1","cwd":"/tmp","hook_event_name":"Stop","last_assistant_message":"hola"}' \
+d=$(mktemp -d) && cd "$d" && printf 'NOTIFY_AGENT=prueba\nNOTIFY_TASK=demo\n' > .claude-notify
+echo "{\"session_id\":\"s1\",\"cwd\":\"$d\",\"hook_event_name\":\"Stop\",\"last_assistant_message\":\"hola\"}" \
   | DRY_RUN=1 bash ~/.claude/hooks/grokbot-notify.sh
 ```
+
+Para probar el envío HTTP completo (headers incluidos) sin tocar Slack, apuntá el hook a un servidor falso local con `SLACK_API_URL=http://127.0.0.1:<puerto>/api/chat.postMessage` (perilla solo para tests; ver `tests/test-scripts.sh`).
 
 Sin `DRY_RUN` publica de verdad. Log: `${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log` (directorio privado del usuario, creado con `umask 077`; se cambia con `NOTIFY_STATE_DIR`).
 
@@ -228,7 +231,7 @@ Todo corre sin red y sin tokens reales, con un `HOME` temporal (no toca tu `~/.c
 
 Si cambiás `hooks/notify.sh` o `hooks/settings.json`, regenerá `cloud/setup.sh` con `bash cloud/build.sh` (el test falla si queda desactualizado).
 
-CI: [`ci/github-workflow-test.yml`](ci/github-workflow-test.yml) corre `shellcheck` y `bash tests/run-all.sh` en cada PR y en cada push a `main` (sin secretos). Para activarlo, movelo a `.github/workflows/test.yml` (pushear workflows requiere un token con scope `workflow`).
+CI: [`ci/github-workflow-test.yml`](ci/github-workflow-test.yml) corre `shellcheck` y `bash tests/run-all.sh` en cada PR y en cada push a `main` (sin secretos). Para activarlo, movelo a .github/workflows/test.yml (pushear workflows requiere un token con scope `workflow`).
 
 ## Créditos
 
