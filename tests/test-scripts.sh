@@ -6,6 +6,7 @@
 # - cloud/build.sh (--check y build en una copia) y cloud/setup.sh en un HOME limpio.
 # Uso: bash tests/test-scripts.sh   — sale ≠0 si falla algún caso.
 
+# shellcheck disable=SC2016 # los backticks de los mensajes esperados son literales de mrkdwn
 set -u
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -94,18 +95,22 @@ proj="$work/proj"
 mkdir -p "$proj"
 printf 'NOTIFY_AGENT=agente-x\nNOTIFY_TASK=tarea-1\n' >"$proj/.claude-notify"
 
-# 1. notify.sh: POST real contra el servidor falso.
+# 1. notify.sh: POST real contra el servidor falso (local: sesión como id, sin rama ni repo).
 reset_capture
 printf '{"session_id":"s1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"listo"}' "$proj" |
   SLACK_NOTIFY_TOKEN="$fake_token" SLACK_NOTIFY_CHANNEL=C0123456789 bash "$hook"
 rc=$?
+expected='🤖 *Claude Code*
+*evento:* `Stop`
+*sesión:* `s1`
+*agente:* `notify-agente-x`
+*tarea:* `tarea-1`'
 if [ "$rc" = 0 ] && [ "$(n_requests)" = 1 ] &&
   [ "$(req_channel 1)" = C0123456789 ] &&
-  req_text 1 | tail -n 1 | grep -qx 'notify-agente-x event=Stop task=tarea-1 session=s1 branch=-' &&
-  [ "$(req_text 1 | wc -l)" = 3 ] && ! req_text 1 | grep -q -e '^>' -e 'listo' &&
+  [ "$(req_text 1)" = "$expected" ] &&
   [ "$(req_auth 1)" = "Bearer $fake_token" ] &&
   grep -q 'enviado: ' "$NOTIFY_STATE_DIR/notify.log"; then
-  ok "notify.sh POST real: canal, 3 líneas, keyword y Authorization"
+  ok "notify.sh POST real: canal, texto exacto, keyword y Authorization"
 else
   ko "notify.sh POST real" "rc=$rc req=$(cat "$captured" 2>/dev/null) log=$(cat "$NOTIFY_STATE_DIR/notify.log" 2>/dev/null)"
 fi
@@ -114,6 +119,21 @@ fi
 printf '{"session_id":"s1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"listo"}' "$proj" |
   SLACK_NOTIFY_TOKEN="$fake_token" SLACK_NOTIFY_CHANNEL=C0123456789 bash "$hook"
 if [ "$(n_requests)" = 1 ]; then ok "dedup después de un envío real"; else ko "dedup después de un envío real" "requests=$(n_requests)"; fi
+
+# 1c. Nube sin token (lo inyecta el proxy): sin Authorization propio, sesión como <url|abrir>.
+reset_capture
+printf '{"session_id":"s1c","cwd":"%s","hook_event_name":"StopFailure","error":"rate_limit"}' "$proj" |
+  CLAUDE_CODE_REMOTE=true CLAUDE_CODE_REMOTE_SESSION_ID=session_abc SLACK_NOTIFY_CHANNEL=C0123456789 bash "$hook"
+expected='🤖 *Claude Code*
+*evento:* `StopFailure` · `error=rate_limit`
+*sesión:* <https://claude.ai/code/session_abc|abrir>
+*agente:* `notify-agente-x`
+*tarea:* `tarea-1`'
+if [ "$(n_requests)" = 1 ] && [ "$(req_text 1)" = "$expected" ] && [ -z "$(req_auth 1)" ]; then
+  ok "nube: POST sin Authorization, sesión como link"
+else
+  ko "nube: POST sin token" "req=$(cat "$captured" 2>/dev/null)"
+fi
 
 # 2. notify-run: claude falso que sale 137 → ProcessExit exit=137 publicado.
 reset_capture
@@ -124,7 +144,8 @@ chmod +x "$fake"
   SLACK_NOTIFY_CHANNEL=C0123456789 bash "$repo_dir/local/notify-run" -p hola)
 rc=$?
 if [ "$rc" = 137 ] && [ "$(n_requests)" = 1 ] &&
-  req_text 1 | grep -q 'notify-agente-x event=ProcessExit exit=137 task=tarea-1 '; then
+  req_text 1 | grep -qxF '*evento:* `ProcessExit` · `exit=137`' &&
+  req_text 1 | grep -qxF '*agente:* `notify-agente-x`'; then
   ok "notify-run exit 137 → ProcessExit publicado"
 else
   ko "notify-run exit 137" "rc=$rc req=$(cat "$captured" 2>/dev/null)"
@@ -142,7 +163,7 @@ chmod +x "$fake2"
 (cd "$proj" && NOTIFY_CLAUDE_BIN="$fake2" NOTIFY_HOOK="$hook" SLACK_NOTIFY_TOKEN="$fake_token" \
   SLACK_NOTIFY_CHANNEL=C0123456789 bash "$repo_dir/local/notify-run" -p hola)
 rc=$?
-if [ "$rc" = 0 ] && [ "$(n_requests)" = 1 ] && req_text 1 | grep -q 'event=Stop ' &&
+if [ "$rc" = 0 ] && [ "$(n_requests)" = 1 ] && req_text 1 | grep -qxF '*evento:* `Stop`' &&
   ! grep -q ProcessExit "$captured"; then
   ok "notify-run con Stop → sin ProcessExit"
 else

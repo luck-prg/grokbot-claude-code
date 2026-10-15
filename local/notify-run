@@ -6,7 +6,7 @@
 #
 # Los hooks cubren el fin normal, errores de API y la mayoría de las salidas, pero
 # SIGKILL, OOM o un crash no disparan hooks. Al salir, si ningún hook terminal
-# (Stop/StopFailure/SessionEnd) avisó en esta corrida, publica event=ProcessExit exit=<código>.
+# (Stop/StopFailure/SessionEnd) avisó en esta corrida, publica un aviso ProcessExit con exit=<código>.
 #
 # Inspirado en wake-on-done de eze-grokbot:
 # https://github.com/eze-is/eze-grokbot/tree/main/wake-on-done

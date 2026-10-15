@@ -26,10 +26,14 @@ cat >"$hook" <<'GROKBOT_NOTIFY_SH_EOF'
 # grokbot-claude-code: hook de Claude Code que avisa en Slack a un agente de Grok Bot.
 #
 # Lee el JSON del hook por stdin y publica en el canal de notificaciones un mensaje
-# Slack mrkdwn de 3 líneas (ver format_message):
-#   🤖 *Claude Code* · `Stop` · <url|sesión>
-#   repo `owner/name` · rama `x` · agente `notify-<agente>` · tarea `t`
-#   notify-<agente> event=Stop task=t session=<id|url> branch=x
+# Slack mrkdwn con un campo por línea (ver format_message):
+#   🤖 *Claude Code*
+#   *evento:* `Stop`
+#   *sesión:* <url|abrir>
+#   *repo:* `owner/name`
+#   *rama:* `x`
+#   *agente:* `notify-<agente>`
+#   *tarea:* `t`
 #
 # Nunca bloquea ni hace fallar a Claude: siempre sale con 0 y no escribe JSON en stdout.
 #
@@ -192,36 +196,42 @@ repo_slug() {
 }
 
 # format_message <evento> <detalle> <sesión> <agente> <tarea> <rama> <repo>
-# Arma el texto Slack mrkdwn (el campo "text" del POST). Sin LLM, determinístico:
-#   🤖 *Claude Code* · `Stop` · <https://claude.ai/code/abc|sesión>
-#   repo `o/n` · rama `x` · agente `notify-slug` · tarea `t`
-#   notify-slug event=Stop task=t session=<id|url> branch=x
-# El único notify-<slug> real es el del agente (líneas 2 y 3); el texto variable se neutraliza.
+# Arma el texto Slack mrkdwn (el campo "text" del POST). Sin LLM, determinístico.
+# Un campo por línea, `*<campo>:* <valor>`, con el valor en `código` o como <url|abrir>:
+#   🤖 *Claude Code*
+#   *evento:* `StopFailure` · `error=rate_limit`
+#   *sesión:* <https://claude.ai/code/abc|abrir>   (en local: `<session_id>`)
+#   *repo:* `o/n`
+#   *rama:* `x`
+#   *agente:* `notify-slug`
+#   *tarea:* `t`
+# Los campos vacíos (o `-`) se omiten con su línea. El único notify-<slug> real es el
+# del agente; el texto variable se neutraliza.
 format_message() {
   local event="$1" detail="$2" session="$3" agent="$4" task="$5" branch="$6" repo="$7"
-  local nl=$'\n' out sess url fields="" f
+  local nl=$'\n' out url f name val
 
+  out="🤖 *Claude Code*"
+  [ -n "$event" ] && out+="$nl*evento:* $(code_span "$event")${detail:+ · $(code_span "$detail")}"
   case "$session" in
+    '' | '-') ;;
     https://*)
       url=$(printf '%s' "$session" | tr -d '<>| `')
-      sess="<$url|sesión>"
+      out+="$nl*sesión:* <$url|abrir>"
       ;;
-    *) sess=$(code_span "$session") ;;
+    *) out+="$nl*sesión:* $(code_span "$session")" ;;
   esac
-  out="🤖 *Claude Code* · $(code_span "$event")${detail:+ · $(code_span "$detail")} · $sess"
 
-  for f in "repo|$repo" "rama|$branch" "agente|${agent:+notify-$agent}" "tarea|$task"; do
-    case "${f#*|}" in '' | '-') continue ;; esac
-    if [ "${f%%|*}" = agente ]; then
-      # Literal: es el keyword que matchea la routine.
-      fields+="${fields:+ · }agente \`${f#*|}\`"
+  for f in "repo|$repo" "rama|$branch" "agente|$agent" "tarea|$task"; do
+    name="${f%%|*}" val="${f#*|}"
+    case "$val" in '' | '-') continue ;; esac
+    if [ "$name" = agente ]; then
+      # Literal: es el keyword que matchea la routine (el slug ya viene saneado).
+      out+="$nl*agente:* \`notify-$val\`"
     else
-      fields+="${fields:+ · }${f%%|*} $(code_span "${f#*|}")"
+      out+="$nl*$name:* $(code_span "$val")"
     fi
   done
-  [ -n "$fields" ] && out+="$nl$fields"
-
-  out+="$nl""notify-$agent $(neutralize "event=$event${detail:+ $detail} task=${task:--} session=$session branch=${branch:--}" | tr -d '`')"
   printf '%s' "$out"
 }
 
