@@ -3,7 +3,8 @@ name: claude-code-task
 description: >-
   Usar cuando un bot quiere delegar una tarea de código en un repo a Claude Code y
   enterarse por Slack cuando termina o necesita input, sin hacer polling. También para
-  continuar, mandarle un mensaje o leer una sesión existente de Claude Code en la nube.
+  continuar, mandarle un mensaje o leer una sesión existente de Claude Code en la nube,
+  y para ver los modelos disponibles y elegir con cuál lanzarla.
   Por defecto corre en la nube (`claude --cloud`); local (worktree + notify-run) solo
   como fallback.
 ---
