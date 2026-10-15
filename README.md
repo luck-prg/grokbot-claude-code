@@ -103,6 +103,7 @@ En la configuración del environment:
 2. **Network secret:** tipo Bearer para el host `slack.com`, con el token `xoxb-...`. El proxy de Anthropic inyecta el header `Authorization` en las requests de la sesión. Los secretos matchean **solo por host**, no por path, y el proxy **no** los agrega a requests del setup script (no intentes probar el envío ahí). Cuando no hay `SLACK_NOTIFY_TOKEN` en el env y `CLAUDE_CODE_REMOTE=true`, el hook no manda su propio header.
 3. **Variables de entorno:** `SLACK_NOTIFY_CHANNEL=C0123456789`. Opcional: `NOTIFY_AGENT=<agent-slug>` como fallback si el environment es de un solo agente (la línea `notify:` del prompt gana).
 4. **Setup script:** pegá entero el contenido de [`cloud/setup.sh`](cloud/setup.sh). Escribe el hook y mergea `~/.claude/settings.json` dentro de la VM.
+5. **Marcalo como environment por defecto** de tu cuenta en claude.ai/code. `claude --cloud` siempre usa el environment por defecto y no se puede elegir otro desde la terminal (`--environment` solo acepta environments self-hosted `ccpool_...`, no los `env_...` de claude.ai). Si el por defecto es otro, Claude trabaja igual pero el aviso de Slack nunca llega.
 
 A quién avisar va en el propio prompt (línea `notify: <agent-slug>`), así que no hay nada que crear dentro de la VM.
 
