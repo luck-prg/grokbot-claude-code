@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"00000000-0000-0000-0000-000000000000","message":{"role":"user","content":"Arreglá el login.\nnotify: Mal Slug\nsin notify: agente-inline\\nnotify: escapado"},"uuid":"00000000-0000-0000-0000-000000000021"}
+{"type":"assistant","sessionId":"00000000-0000-0000-0000-000000000000","message":{"role":"assistant","content":[{"type":"text","text":"Listo."}]},"uuid":"00000000-0000-0000-0000-000000000022"}

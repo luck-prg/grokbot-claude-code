@@ -27,7 +27,10 @@ Cómo parsearlo (humano, script o agente):
 - El valor va entre backticks (`` `valor` ``) o, en `sesión` en la nube, como link `<url|session_xxx>` (la URL es lo que está entre `<` y `|`; el texto del link, entre `|` y `>`, es el id de sesión). En local, `sesión` es el id entre backticks.
 - `evento` puede traer un detalle en un segundo span: `` `StopFailure` · `error=rate_limit` ``.
 - Campos posibles, en este orden: `evento`, `sesión`, `repo`, `rama`, `agente`, `tarea`. Si un campo no tiene valor, su línea no está.
-- `agente` es tu keyword `notify-<slug>` tal cual. Es el único `notify-` real del mensaje: en los demás valores aparece como `notify‐` (guion U+2010) y `&`, `<`, `>` como `&amp;`, `&lt;`, `&gt;`.
+- `agente` es tu keyword `notify-<slug>` tal cual. Es el único `notify-` real del mensaje: en los demás valores aparece como `notify‐` (guion U+2010) y `&`, `<`, `>` como `&amp;`, `&lt;`, `&gt;`. Si el prompt no traía la línea `notify: <slug>`, sale `` `desconocido` `` sin keyword: el aviso llega al canal pero no despierta a nadie.
+- `tarea` es la rama sin el prefijo `feature/`, `hotfix/` o `release/` (`feature/login` → `login`; otra rama queda igual). Sin rama (HEAD detached) no hay `tarea`.
+
+**A quién avisar:** el prompt de la tarea lleva una línea sola `notify: <slug>` (tu slug, sin el prefijo `notify-`). El hook la lee del **primer** mensaje del usuario de la sesión; en mensajes posteriores no cuenta. No hace falta crear archivos ni variables por tarea.
 
 Tu routine con trigger Slack por keyword `notify-<slug>` te despierta solo a vos. **No hagas polling** (no `sleep`, no revisar `run.log` en loop, no `ps`): esperá el mensaje.
 
@@ -36,7 +39,8 @@ Tu routine con trigger Slack por keyword `notify-<slug>` te despierta solo a vos
 - Una tarea = una carpeta de trabajo propia + una rama nueva. Nunca dos tareas en la misma carpeta (dos bots se pisan).
 - Las imágenes de evidencia no se commitean; van en la descripción del PR.
 - El que juzga no es el que construye: el PR lo revisa otro bot o una persona.
-- `.claude-notify`, `BRIEF.md`, `STATUS.md` y `run.log` no se commitean (salvo un `.claude-notify` que el repo ya tenga commiteado a propósito para la nube).
+- `BRIEF.md`, `STATUS.md` y `run.log` no se commitean.
+- La rama es `feature/<tarea>` (o `hotfix/<tarea>` / `release/<tarea>`): así el campo `tarea` del aviso es `<tarea>`.
 
 ## Una sola vez: tu routine
 Si todavía no te configuraste, seguí la skill `claude-code-notify-setup`. Tiene dos flujos: **coordinador** (un agente le pregunta al usuario el canal, su channel id y qué bots activar, y configura a todos) o **por agente** (te configurás vos). En los dos, el canal (`#<canal>`) y su id se le preguntan al usuario, los slugs se chequean con `local/check-slugs` (colisión por substring) y se hace una sola prueba por bot. En resumen, la routine tiene este trigger, con `<slug>` en minúsculas, sin espacios, y sin estar contenido en el keyword de otro agente ni contenerlo (la routine matchea por substring):
@@ -52,41 +56,36 @@ Instrucción de la routine: "Llegó un aviso de Claude Code. Confirmá que la l�
 
 1. Prepará la rama en una carpeta propia y **hacé push antes de lanzar** (la nube solo ve lo que está en el remoto):
    ```
-   git worktree add /workspace/cc/<repo>-<tarea> -b <tipo>/<tarea> origin/<base>
-   cd /workspace/cc/<repo>-<tarea> && git push -u origin <tipo>/<tarea>
+   git worktree add /workspace/cc/<repo>-<tarea> -b feature/<tarea> origin/<base>
+   cd /workspace/cc/<repo>-<tarea> && git push -u origin feature/<tarea>
    ```
-2. Decí a quién avisar. `.claude-notify` no viaja a la nube (no está commiteado), así que:
-   - usá un environment con `NOTIFY_AGENT=<slug>` en sus variables, o
-   - un `.claude-notify` que el repo ya tenga commiteado a propósito para la nube, o
-   - empezá la tarea con: "Primero creá `.claude-notify` en la raíz con `NOTIFY_AGENT=<slug>` y `NOTIFY_TASK=<tarea>` (no lo commitees)."
-3. Lanzá la sesión desde la carpeta del repo. `claude --cloud` necesita una TTY; desde un bot (sin terminal) corrélo con `script`:
+2. Lanzá la sesión desde la carpeta del repo, con la línea `notify: <slug>` en el prompt. `claude --cloud` necesita una TTY; desde un bot (sin terminal) corrélo con `script`:
    ```
    cd /workspace/cc/<repo>-<tarea>
-   script -qec 'claude --cloud "Primero creá .claude-notify en la raíz con NOTIFY_AGENT=<slug> y NOTIFY_TASK=<tarea> (no lo commitees). Después: <objetivo, alcance y lo que NO se toca, cómo probar, criterio de listo>. Commiteá en la rama y hacé push de la rama. No mergees."' /dev/null </dev/null
+   script -qec 'claude --cloud "notify: <slug>
+   <objetivo, alcance y lo que NO se toca, cómo probar, criterio de listo>. Commiteá en la rama y hacé push de la rama. No mergees."' /dev/null </dev/null
    ```
-4. Avisá al usuario que arrancó, con **un solo mensaje corto**, como con los agentes de Cursor. Tiene que tener el link de la sesión (`https://claude.ai/code/<session id>`, lo imprime `claude --cloud`) con el nombre de la tarea como texto, el modelo, la rama, que no va a mergear y que te avisan por Slack cuando termine. Plantilla:
-   > Ya arrancó la [sesión de Claude Code de <tarea>](https://claude.ai/code/<session id>), con <modelo>. Trabaja en la rama `<tipo>/<tarea>` y no va a mergear nada. Cuando termine me llega el aviso por Slack, lo reviso y te cuento.
-5. Terminá tu turno. No esperes ni revises (no polling): el aviso de Slack te despierta.
+   La línea `notify: <slug>` tiene que ir sola en su línea (salto de línea real, no `\n` escrito).
+3. Avisá al usuario que arrancó, con **un solo mensaje corto**, como con los agentes de Cursor. Tiene que tener el link de la sesión (`https://claude.ai/code/<session id>`, lo imprime `claude --cloud`) con el nombre de la tarea como texto, el modelo, la rama, que no va a mergear y que te avisan por Slack cuando termine. Plantilla:
+   > Ya arrancó la [sesión de Claude Code de <tarea>](https://claude.ai/code/<session id>), con <modelo>. Trabaja en la rama `feature/<tarea>` y no va a mergear nada. Cuando termine me llega el aviso por Slack, lo reviso y te cuento.
+4. Terminá tu turno. No esperes ni revises (no polling): el aviso de Slack te despierta.
 
 En la nube, `*sesión:*` trae el link `<url|session_xxx>`: el texto del link es el id de sesión (si la variable de la nube no está, sale solo el id entre backticks). Las mismas reglas aplican.
 
 ## Alternativa local (fallback)
 Usala solo si la nube no está disponible (sin environment, sin GitHub conectado, caída), si la tarea necesita recursos locales de la computadora compartida (archivos, servicios, credenciales) o si el usuario la pide.
 
-1. Prepará la carpeta: `git worktree add /workspace/cc/<repo>-<tarea> -b <tipo>/<tarea> origin/<base>` desde un clon del repo (o un clon nuevo en esa ruta).
+1. Prepará la carpeta: `git worktree add /workspace/cc/<repo>-<tarea> -b feature/<tarea> origin/<base>` desde un clon del repo (o un clon nuevo en esa ruta).
 2. Escribí el brief en `/workspace/cc/<repo>-<tarea>/BRIEF.md`: objetivo, alcance y lo que NO se toca, cómo probar, criterio de listo.
-3. Decí a quién avisar, en la raíz de la carpeta, y excluilo de git:
+3. Corré en segundo plano con `notify-run` (mismos argumentos que `claude`; avisa también si el proceso muere sin que salte ningún hook, p.ej. SIGKILL u OOM). El prompt empieza con la línea `notify: <slug>`:
    ```
-   cd /workspace/cc/<repo>-<tarea>
-   printf 'NOTIFY_AGENT=<slug>\nNOTIFY_TASK=<repo>-<tarea>\n' > .claude-notify
-   echo .claude-notify >> "$(git rev-parse --git-common-dir)/info/exclude"
+   cd /workspace/cc/<repo>-<tarea> && nohup notify-run -p "notify: <slug>
+   Leé BRIEF.md y hacelo. Al terminar escribí STATUS.md con: qué cambió, cómo probarlo, tests corridos con su resultado, y qué quedó pendiente o en duda. No mergees ni hagas push." < /dev/null > run.log 2>&1 &
    ```
-4. Corré en segundo plano con `notify-run` (mismos argumentos que `claude`; avisa también si el proceso muere sin que salte ningún hook, p.ej. SIGKILL u OOM):
-   `cd /workspace/cc/<repo>-<tarea> && nohup notify-run -p "Leé BRIEF.md y hacelo. Al terminar escribí STATUS.md con: qué cambió, cómo probarlo, tests corridos con su resultado, y qué quedó pendiente o en duda. No mergees ni hagas push." < /dev/null > run.log 2>&1 &`
    Agregá `--permission-mode acceptEdits` si necesita editar sin pedir confirmación.
-5. Avisá al usuario que arrancó, con un solo mensaje corto (no hay link de sesión: nombrá la carpeta). Plantilla:
-   > Ya arrancó Claude Code en local para <tarea> (carpeta `/workspace/cc/<repo>-<tarea>`), con <modelo>. Trabaja en la rama `<tipo>/<tarea>`, no hace push y no va a mergear nada. Cuando termine me llega el aviso por Slack, lo reviso y te cuento.
-6. Terminá tu turno. No esperes ni revises: el aviso te despierta.
+4. Avisá al usuario que arrancó, con un solo mensaje corto (no hay link de sesión: nombrá la carpeta). Plantilla:
+   > Ya arrancó Claude Code en local para <tarea> (carpeta `/workspace/cc/<repo>-<tarea>`), con <modelo>. Trabaja en la rama `feature/<tarea>`, no hace push y no va a mergear nada. Cuando termine me llega el aviso por Slack, lo reviso y te cuento.
+5. Terminá tu turno. No esperes ni revises: el aviso te despierta.
 
 **Regla: nunca esperes con bucles de `pgrep` ni `pgrep -f`.** `pgrep -f` matchea contra la línea de comando completa, incluida la del propio `bash` que corre el bucle (que contiene el patrón buscado): se encuentra a sí mismo y el bucle nunca termina.
 Si de verdad tenés que esperar a que termine, hacelo de una de estas formas:
@@ -107,7 +106,7 @@ Leé los campos `*evento:*`, `*tarea:*`, `*sesión:*` y `*rama:*`; el mensaje no
 ## Si falla
 - Error de sesión o de cuenta: avisá al dueño; no intentes iniciar sesión vos.
 - Límite de uso: avisá y no reintentes en loop.
-- No llega ningún aviso: en la nube, revisá que el environment tenga `SLACK_NOTIFY_CHANNEL`, el network secret y `NOTIFY_AGENT` (o que Claude haya creado `.claude-notify`); en local, `${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log` y `.claude-notify`. Avisá al dueño en vez de hacer polling.
+- No llega ningún aviso: en la nube, revisá que el environment tenga `SLACK_NOTIFY_CHANNEL` y el network secret; en local, `${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log`. Si en el canal aparece el aviso con `*agente:*` `` `desconocido` ``, el primer mensaje del prompt no tenía la línea `notify: <slug>` sola en su línea. Avisá al dueño en vez de hacer polling.
 - La nube no está disponible: pasá a la alternativa local.
 - La primera vez en una carpeta nueva el lanzamiento se queda colgado: en una sesión interactiva (como `claude --cloud` corrido con `script`), Claude Code muestra el diálogo "trust this folder" y espera una respuesta que nadie da. Las sesiones `-p` no lo muestran. La confianza se guarda por carpeta en `~/.claude.json`, en `projects["<ruta>"].hasTrustDialogAccepted`. Para evitarlo, antes de lanzar aceptá el diálogo una vez a mano en esa carpeta o marcá el worktree como confiable (con ningún otro `claude` abierto, porque las sesiones reescriben el archivo entero y pisan el cambio):
   ```

@@ -1,0 +1,5 @@
+{"type":"summary","summary":"notify: resumen","leafUuid":"00000000-0000-0000-0000-000000000001"}
+{"type":"user","isMeta":true,"sessionId":"00000000-0000-0000-0000-000000000000","message":{"role":"user","content":"notify: meta\nCaveat: mensaje meta"},"uuid":"00000000-0000-0000-0000-000000000002"}
+{"parentUuid":null,"isSidechain":false,"type":"user","sessionId":"00000000-0000-0000-0000-000000000000","message":{"role":"user","content":"Arreglá el \"login\" roto.\nnotify: agente-string\nNo toques la base."},"uuid":"00000000-0000-0000-0000-000000000003"}
+{"type":"assistant","sessionId":"00000000-0000-0000-0000-000000000000","message":{"role":"assistant","content":[{"type":"text","text":"notify: asistente"}]},"uuid":"00000000-0000-0000-0000-000000000004"}
+{"type":"user","sessionId":"00000000-0000-0000-0000-000000000000","message":{"role":"user","content":"notify: otro-agente"},"uuid":"00000000-0000-0000-0000-000000000005"}

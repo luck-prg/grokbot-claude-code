@@ -8,7 +8,9 @@
 # - sin canal hardcodeado: el único canal permitido es #<canal>;
 # - la skill de tareas declara la nube por defecto (`claude --cloud`) y local como fallback,
 #   el aviso de arranque con el link de la sesión y el diálogo de confianza;
-# - ninguna skill sugiere esperar con pgrep (solo se permite la regla que lo prohíbe).
+# - ninguna skill sugiere esperar con pgrep (solo se permite la regla que lo prohíbe);
+# - las skills piden la línea `notify: <slug>` en el prompt (nube y local);
+# - ningún archivo trackeado menciona el archivo por carpeta ni la variable de tarea removidos.
 # Uso: bash tests/lint-skills.sh   — sale ≠0 si falla algún caso.
 
 set -u
@@ -147,7 +149,9 @@ pgrep_suggestions() {
   grep -niE '(^|[^[:alnum:]_-])pgrep([^[:alnum:]_-]|$)' -- "$1" | grep -viE 'nunca[^.]*pgrep'
 }
 pgrep_tmp=$(mktemp -d)
+# shellcheck disable=SC2016 # backticks literales de markdown
 printf 'Nunca esperes con `pgrep -f`.\n' >"$pgrep_tmp/prohibe.md"
+# shellcheck disable=SC2016 # backticks literales de markdown
 printf 'Esperá con `while pgrep -f claude; do sleep 5; done`.\n' >"$pgrep_tmp/sugiere.md"
 pgrep_bad=""
 [ -z "$(pgrep_suggestions "$pgrep_tmp/prohibe.md")" ] || pgrep_bad+="autotest: la regla que lo prohíbe dispara el chequeo"$'\n'
@@ -159,6 +163,31 @@ for f in "${skills[@]}"; do
 done
 grep -qiE 'nunca[^.]*pgrep' "$task" || pgrep_bad+="$task: falta la regla 'nunca esperar con pgrep'"$'\n'
 if [ -z "$pgrep_bad" ]; then ok "skills no sugieren pgrep para esperar"; else ko "skills sugieren pgrep para esperar" "$pgrep_bad"; fi
+
+# 9. A quién avisar va en el prompt: las skills piden la línea `notify: <slug>` (la de tareas,
+#    en el flujo de la nube y en el local).
+notify_bad=""
+for f in "${skills[@]}"; do
+  grep -qF -- 'notify: <slug>' "$f" || notify_bad+="$f: falta la línea 'notify: <slug>'"$'\n'
+done
+grep -qE '^[[:space:]]*script -qec .claude --cloud "notify: <slug>$' "$task" ||
+  notify_bad+="$task: el lanzamiento en la nube no empieza el prompt con 'notify: <slug>'"$'\n'
+grep -qE 'notify-run -p "notify: <slug>$' "$task" ||
+  notify_bad+="$task: el lanzamiento local no empieza el prompt con 'notify: <slug>'"$'\n'
+if [ -z "$notify_bad" ]; then ok "skills piden la línea notify: <slug>"; else ko "skills sin la línea notify:" "$notify_bad"; fi
+
+# 10. Nada removido sigue mencionado en el repo: ni el archivo por carpeta de antes ni la
+#     variable de tarea. Patrones armados por concatenación para no detectarse a sí mismo.
+removed=('\.claude''-notify' 'NOTIFY''_TASK')
+removed_bad=""
+while IFS= read -r -d '' f; do
+  [ -f "$f" ] || continue
+  for pat in "${removed[@]}"; do
+    hits=$(grep -nE -- "$pat" "$f")
+    [ -z "$hits" ] || removed_bad+="$f:"$'\n'"$hits"$'\n'
+  done
+done < <(git ls-files -z -co --exclude-standard)
+if [ -z "$removed_bad" ]; then ok "sin menciones a configuración removida"; else ko "menciones a configuración removida" "$removed_bad"; fi
 
 echo
 echo "pasaron: $pass  fallaron: $fail"

@@ -28,7 +28,7 @@ ko() { fail=$((fail + 1)); printf 'FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf ' 
 export HOME="$work/home"
 export NOTIFY_STATE_DIR="$work/state"
 export NOTIFY_CONFIG="$work/no-config"
-unset NOTIFY_AGENT NOTIFY_TASK NOTIFY_RUN_ID SLACK_NOTIFY_TOKEN SLACK_NOTIFY_CHANNEL DRY_RUN \
+unset NOTIFY_AGENT NOTIFY_RUN_ID SLACK_NOTIFY_TOKEN SLACK_NOTIFY_CHANNEL DRY_RUN \
   CLAUDE_CODE_REMOTE CLAUDE_CODE_REMOTE_SESSION_ID CLAUDE_CONFIG_DIR XDG_STATE_HOME BIN_DIR \
   http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 export no_proxy="127.0.0.1,localhost" NO_PROXY="127.0.0.1,localhost"
@@ -92,20 +92,21 @@ req_channel() { sed -n "${1}p" "$captured" | jq -r '.body | fromjson | .channel'
 req_field() { sed -n "${1}p" "$captured" | jq -r --arg k "$2" '.body | fromjson | .[$k]'; }
 req_auth() { sed -n "${1}p" "$captured" | jq -r '.headers | to_entries[] | select(.key | ascii_downcase == "authorization") | .value'; }
 
+# Carpeta sin git (sin rama, repo ni tarea) y transcript con `notify: agente-x` en el primer mensaje.
 proj="$work/proj"
 mkdir -p "$proj"
-printf 'NOTIFY_AGENT=agente-x\nNOTIFY_TASK=tarea-1\n' >"$proj/.claude-notify"
+tr="$work/t.jsonl"
+printf '{"type":"user","message":{"role":"user","content":"Hacé la tarea.\\nnotify: agente-x"}}\n' >"$tr"
 
 # 1. notify.sh: POST real contra el servidor falso (local: sesión como id, sin rama ni repo).
 reset_capture
-printf '{"session_id":"s1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"listo"}' "$proj" |
+printf '{"session_id":"s1","transcript_path":"%s","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"listo"}' "$tr" "$proj" |
   SLACK_NOTIFY_TOKEN="$fake_token" SLACK_NOTIFY_CHANNEL=C0123456789 bash "$hook"
 rc=$?
 expected='*Claude Code*
 • *evento:* `Stop`
 • *sesión:* `s1`
-• *agente:* `notify-agente-x`
-• *tarea:* `tarea-1`'
+• *agente:* `notify-agente-x`'
 if [ "$rc" = 0 ] && [ "$(n_requests)" = 1 ] &&
   [ "$(req_channel 1)" = C0123456789 ] &&
   [ "$(req_text 1)" = "$expected" ] &&
@@ -119,19 +120,18 @@ else
 fi
 
 # 1b. Dedup tras envío exitoso: el mismo Stop no se publica dos veces.
-printf '{"session_id":"s1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"listo"}' "$proj" |
+printf '{"session_id":"s1","transcript_path":"%s","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"listo"}' "$tr" "$proj" |
   SLACK_NOTIFY_TOKEN="$fake_token" SLACK_NOTIFY_CHANNEL=C0123456789 bash "$hook"
 if [ "$(n_requests)" = 1 ]; then ok "dedup después de un envío real"; else ko "dedup después de un envío real" "requests=$(n_requests)"; fi
 
 # 1c. Nube sin token (lo inyecta el proxy): sin Authorization propio, sesión como <url|id>.
 reset_capture
-printf '{"session_id":"s1c","cwd":"%s","hook_event_name":"StopFailure","error":"rate_limit"}' "$proj" |
+printf '{"session_id":"s1c","transcript_path":"%s","cwd":"%s","hook_event_name":"StopFailure","error":"rate_limit"}' "$tr" "$proj" |
   CLAUDE_CODE_REMOTE=true CLAUDE_CODE_REMOTE_SESSION_ID=session_abc SLACK_NOTIFY_CHANNEL=C0123456789 bash "$hook"
 expected='*Claude Code*
 • *evento:* `StopFailure` · `error=rate_limit`
 • *sesión:* <https://claude.ai/code/session_abc|session_abc>
-• *agente:* `notify-agente-x`
-• *tarea:* `tarea-1`'
+• *agente:* `notify-agente-x`'
 if [ "$(n_requests)" = 1 ] && [ "$(req_text 1)" = "$expected" ] && [ -z "$(req_auth 1)" ]; then
   ok "nube: POST sin Authorization, sesión como link con el id"
 else
@@ -142,7 +142,7 @@ fi
 bodies=()
 for nojq in 0 1; do
   reset_capture
-  printf '{"session_id":"s1d","cwd":"%s","hook_event_name":"Stop"}' "$proj" |
+  printf '{"session_id":"s1d","transcript_path":"%s","cwd":"%s","hook_event_name":"Stop"}' "$tr" "$proj" |
     SLACK_NOTIFY_TOKEN="$fake_token" SLACK_NOTIFY_CHANNEL=C0123456789 NOTIFY_NO_JQ=$nojq \
       SLACK_NOTIFY_USERNAME='Grok "QA"' SLACK_NOTIFY_ICON_URL='https://example.com/i.png' bash "$hook"
   bodies[nojq]=$(sed -n 1p "$captured" | jq -c '.body | fromjson')
@@ -159,13 +159,14 @@ else
   ko "body con y sin jq" "jq=[${bodies[0]}] sed=[${bodies[1]}]"
 fi
 
-# 2. notify-run: claude falso que sale 137 → ProcessExit exit=137 publicado.
+# 2. notify-run: claude falso que sale 137 → ProcessExit exit=137 publicado (sin hook previo
+#    no hay transcript: el agente sale de NOTIFY_AGENT).
 reset_capture
 fake="$work/fake-claude-137"
 printf '#!/usr/bin/env bash\nexit 137\n' >"$fake"
 chmod +x "$fake"
 (cd "$proj" && NOTIFY_CLAUDE_BIN="$fake" NOTIFY_HOOK="$hook" SLACK_NOTIFY_TOKEN="$fake_token" \
-  SLACK_NOTIFY_CHANNEL=C0123456789 bash "$repo_dir/local/notify-run" -p hola)
+  SLACK_NOTIFY_CHANNEL=C0123456789 NOTIFY_AGENT=agente-x bash "$repo_dir/local/notify-run" -p hola)
 rc=$?
 if [ "$rc" = 137 ] && [ "$(n_requests)" = 1 ] &&
   req_text 1 | grep -qxF '• *evento:* `ProcessExit` · `exit=137`' &&
@@ -180,7 +181,7 @@ reset_capture
 fake2="$work/fake-claude-stop"
 cat >"$fake2" <<EOF
 #!/usr/bin/env bash
-printf '{"session_id":"s2","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"ok"}' "$proj" | bash "$hook"
+printf '{"session_id":"s2","transcript_path":"%s","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"ok"}' "$tr" "$proj" | bash "$hook"
 exit 0
 EOF
 chmod +x "$fake2"

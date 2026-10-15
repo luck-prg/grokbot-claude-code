@@ -23,6 +23,8 @@ Los hooks de Claude Code (en la nube, por defecto, o local como fallback) public
 
 Un campo por línea (`• *<campo>:* <valor>`, valor entre backticks o `<url|session_xxx>`); los campos vacíos no aparecen. La routine identifica al agente por la línea `*agente:*` `` `notify-<slug>` ``, que es el único `notify-` real del mensaje. Detalle del parseo en la skill `claude-code-task`.
 
+El hook saca el agente de la línea `notify: <slug>` del primer mensaje del prompt de la tarea (sin archivos ni variables por tarea) y la `tarea` de la rama, sin el prefijo `feature/`, `hotfix/` o `release/`. Si el prompt no trae esa línea, el aviso sale con agente `` `desconocido` `` y no despierta a nadie.
+
 Cada agente tiene una routine que despierta solo con **su** keyword `notify-<slug>`. Esta skill se corre una vez (por agente o una vez para varios). Para lanzar tareas después, usá la skill `claude-code-task`.
 
 ## Qué le preguntás al usuario (nunca lo adivines)
@@ -70,14 +72,15 @@ Requisito: `@Cursor` tiene que estar invitado a `#<canal>` (es la app que dispar
 Siempre con el bot de notificaciones (vía el hook), no con un mensaje escrito a mano, así se prueba el mismo camino que los avisos reales. Con el hook instalado y `SLACK_NOTIFY_TOKEN` / `SLACK_NOTIFY_CHANNEL` configurados:
 
 ```bash
-d=$(mktemp -d) && cd "$d"
-printf 'NOTIFY_AGENT=<slug>\nNOTIFY_TASK=prueba-notify\n' > .claude-notify
-echo "{\"session_id\":\"prueba-$(date +%s)\",\"cwd\":\"$d\",\"hook_event_name\":\"Stop\",\"last_assistant_message\":\"prueba de routine\"}" \
+d=$(mktemp -d)
+# Transcript mínimo: el primer mensaje del usuario trae la línea notify: <slug>.
+printf '{"type":"user","message":{"role":"user","content":"Prueba de routine.\\nnotify: <slug>"}}\n' > "$d/t.jsonl"
+echo "{\"session_id\":\"prueba-$(date +%s)\",\"transcript_path\":\"$d/t.jsonl\",\"cwd\":\"$d\",\"hook_event_name\":\"Stop\"}" \
   | bash ~/.claude/hooks/grokbot-notify.sh
-cd - >/dev/null && rm -rf "$d"
+rm -rf "$d"
 ```
 
-(Si no corriste `local/install.sh`, usá `hooks/notify.sh` del repo. El `session_id` distinto evita que el dedup lo descarte.) Sin acceso local: pedile al usuario que publique con el bot de notificaciones un mensaje con el formato de arriba, con las líneas `` • *evento:* `Stop` ``, `` • *agente:* `notify-<slug>` `` y `` • *tarea:* `prueba-notify` ``.
+(Si no corriste `local/install.sh`, usá `hooks/notify.sh` del repo. El `session_id` distinto evita que el dedup lo descarte.) Sin acceso local: pedile al usuario que publique con el bot de notificaciones un mensaje con el formato de arriba, con las líneas `` • *evento:* `Stop` `` y `` • *agente:* `notify-<slug>` ``.
 
 Confirmá que la routine de ese bot disparó **una** vez y que no despertó a otro. Si no salta: revisá `${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log`, que `@Cursor` y el bot de notificaciones estén en el canal y que el keyword esté bien escrito. No reintentes en loop.
 
@@ -110,7 +113,7 @@ Configurate para que te despierten los avisos de Claude Code (skill claude-code-
 - Canal de avisos: #<canal>
 - Tu slug: <slug> (keyword notify-<slug>). Ya está chequeado contra colisión por substring con los demás slugs.
 1) Creá en vos una routine con trigger {"type":"slack","channel":"#<canal>","match":{"kind":"keyword","keyword":"notify-<slug>"}} cuya instrucción confirme la línea *agente:* `notify-<slug>`, lea los campos del aviso (una línea por campo, • *<campo>:* <valor>, valor entre backticks o <url|session_xxx>: evento, tarea, sesión, rama) y siga "Al recibir el aviso" de la skill claude-code-task, sin cambiar nada fuera del alcance de la tarea.
-2) Guardá en tu memoria el slug, el keyword y el canal; usá NOTIFY_AGENT=<slug> al lanzar tareas (por defecto en la nube con claude --cloud; local solo como fallback).
+2) Guardá en tu memoria el slug, el keyword y el canal. Al lanzar tareas (por defecto en la nube con claude --cloud; local solo como fallback), poné en el prompt una línea sola "notify: <slug>".
 3) No hagas la prueba vos: avisame cuando la routine esté creada y yo mando una sola prueba.
 No pegues tokens en el chat ni en ningún repo. No hagas polling.
 ```
@@ -120,6 +123,6 @@ No pegues tokens en el chat ni en ningún repo. No hagas polling.
 1. **Preguntá** al usuario el nombre del canal (`#<canal>`) y su channel id (`C0123456789`), y **confirmá** tu slug (proponé uno si no te lo dieron). Preguntá qué `notify-...` ya se usan en el canal.
 2. **Chequeá colisiones** con `local/check-slugs` pasando tu slug y todos los ya usados. Si sale 1, proponé otro y repetí.
 3. **Creá tu routine** (ver "Routine") si no existe ya.
-4. **Guardá en tu memoria** tu slug (`<slug>`), tu keyword (`notify-<slug>`) y el canal. Al lanzar cada tarea con Claude Code, usá el slug **sin** el prefijo: `NOTIFY_AGENT=<slug>` como variable del environment o en el `.claude-notify` que crea Claude al empezar (nube, por defecto), o en `.claude-notify` (local, fallback). Ver la skill `claude-code-task`.
+4. **Guardá en tu memoria** tu slug (`<slug>`), tu keyword (`notify-<slug>`) y el canal. Al lanzar cada tarea con Claude Code (nube por defecto, local como fallback), el prompt lleva una línea sola `notify: <slug>`, con el slug **sin** el prefijo `notify-`. Ver la skill `claude-code-task`.
 5. **Probá** con **una** sola prueba (ver "Prueba").
 6. **Reportá** al usuario: keyword `notify-<slug>`, canal, si la prueba disparó (sí/no) y cualquier problema. Nunca pegues tokens en el reporte.

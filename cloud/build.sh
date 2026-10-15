@@ -22,8 +22,9 @@ render() {
 #   - Network secret: Bearer para el host slack.com con el token xoxb- del bot.
 #     El proxy inyecta el header Authorization solo en requests de la sesión
 #     (no en las de este setup script), así que acá no se prueba el envío.
-#   - Variables de entorno: SLACK_NOTIFY_CHANNEL=C0123456789 (id del canal) y,
-#     si el environment es de un solo agente, NOTIFY_AGENT=<slug>.
+#   - Variables de entorno: SLACK_NOTIFY_CHANNEL=C0123456789 (id del canal).
+#     A quién avisar sale de la línea `notify: <slug>` del prompt; NOTIFY_AGENT=<slug>
+#     queda como fallback opcional (environment de un solo agente).
 #
 # Nunca hace fallar el setup: si algo sale mal, lo dice y sigue.
 

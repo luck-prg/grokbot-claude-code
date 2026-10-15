@@ -21,14 +21,19 @@ export NOTIFY_STATE_DIR="$work/state"
 export NOTIFY_CONFIG="$work/no-config"
 export SLACK_NOTIFY_CHANNEL="C0123456789"
 export DRY_RUN=1
-unset NOTIFY_AGENT NOTIFY_TASK NOTIFY_RUN_ID SLACK_NOTIFY_TOKEN CLAUDE_CODE_REMOTE CLAUDE_CODE_REMOTE_SESSION_ID
+unset NOTIFY_AGENT NOTIFY_RUN_ID SLACK_NOTIFY_TOKEN CLAUDE_CODE_REMOTE CLAUDE_CODE_REMOTE_SESSION_ID
 mkdir -p "$HOME"
 
-# Repo de juguete con .claude-notify en la raíz.
+# Repo de juguete y transcript cuyo primer mensaje del usuario trae `notify: agente-x`.
 proj="$work/proj"
 mkdir -p "$proj/sub"
 git -C "$proj" init -q -b feature/demo
-printf 'NOTIFY_AGENT=agente-x\nNOTIFY_TASK=tarea-1\n' >"$proj/.claude-notify"
+# transcript <archivo> <slug>: transcript JSONL mínimo con la línea notify: en el primer mensaje.
+transcript() {
+  printf '{"type":"user","message":{"role":"user","content":"Hacé la tarea.\\nnotify: %s"}}\n' "$2" >"$1"
+}
+transcript "$work/t.jsonl" agente-x
+TR="$work/t.jsonl"
 
 reset_state() { rm -rf "$NOTIFY_STATE_DIR"; }
 run_hook() { printf '%s' "$1" | bash "$hook"; }
@@ -38,9 +43,9 @@ text_of() { printf '%s' "$1" | sed -n 's/^DRY_RUN POST [^ ]* //p' | jq -r .text 
 has_line() { text_of "$1" | grep -qxF -- "$2"; }
 nl=$'\n'
 
-ev() { # ev <evento> <session> [campos extra JSON] [cwd]
-  printf '{"session_id":"%s","transcript_path":"/tmp/t.jsonl","cwd":"%s","hook_event_name":"%s"%s}' \
-    "$2" "${4:-$proj}" "$1" "${3:+,$3}"
+ev() { # ev <evento> <session> [campos extra JSON] [cwd] — transcript_path = $TR
+  printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","hook_event_name":"%s"%s}' \
+    "$2" "$TR" "${4:-$proj}" "$1" "${3:+,$3}"
 }
 
 # 1. Evento del agente principal envía, con formato correcto.
@@ -51,7 +56,7 @@ expected='*Claude Code*
 • *sesión:* `s1`
 • *rama:* `feature/demo`
 • *agente:* `notify-agente-x`
-• *tarea:* `tarea-1`'
+• *tarea:* `demo`'
 got=$(text_of "$out")
 chan=$(printf '%s' "$out" | sed -n 's/^DRY_RUN POST [^ ]* //p' | jq -r .channel 2>/dev/null)
 if [ "$got" = "$expected" ] && [ "$chan" = "C0123456789" ]; then ok "Stop principal envía"; else ko "Stop principal envía" "got: $out"; fi
@@ -121,26 +126,32 @@ else
   ko "fallback sed: agent_id" "out=[$out] txt=[$txt] nested=[$nested]"
 fi
 
-# 5. Sin agente configurado → no envía.
+# 5. Sin agente (transcript sin línea notify: y sin NOTIFY_AGENT) → igual avisa,
+#    con agente desconocido y sin ningún keyword notify-.
 reset_state
 noproj="$work/noproj"
 mkdir -p "$noproj"
+TR="$work/no-existe.jsonl"
 out=$(run_hook "$(ev Stop s5 '"last_assistant_message":"x"' "$noproj")")
-if [ -z "$out" ]; then ok "sin agente no envía"; else ko "sin agente no envía" "$out"; fi
+expected='*Claude Code*
+• *evento:* `Stop`
+• *sesión:* `s5`
+• *agente:* `desconocido`'
+if [ "$(text_of "$out")" = "$expected" ] && ! printf '%s' "$out" | grep -qi 'notify-'; then
+  ok "sin agente avisa como desconocido, sin keyword"
+else
+  ko "sin agente → desconocido" "$out"
+fi
 
-# 5b. Fallback a env vars.
-out=$(printf '%s' "$(ev Stop s5b '"last_assistant_message":"x"' "$noproj")" | NOTIFY_AGENT=agente-env NOTIFY_TASK=t-env bash "$hook")
+# 5b. Fallback a NOTIFY_AGENT.
+out=$(printf '%s' "$(ev Stop s5b '"last_assistant_message":"x"' "$noproj")" | NOTIFY_AGENT=agente-env bash "$hook")
 expected='*Claude Code*
 • *evento:* `Stop`
 • *sesión:* `s5b`
-• *agente:* `notify-agente-env`
-• *tarea:* `t-env`'
-if [ "$(text_of "$out")" = "$expected" ]; then ok "fallback a NOTIFY_AGENT/NOTIFY_TASK (sin rama ni repo)"; else ko "fallback env" "$out"; fi
+• *agente:* `notify-agente-env`'
+if [ "$(text_of "$out")" = "$expected" ]; then ok "fallback a NOTIFY_AGENT (sin rama, repo ni tarea)"; else ko "fallback env" "$out"; fi
 
-# 5c. .claude-notify en la raíz del repo encontrado desde un subdirectorio.
-reset_state
-out=$(run_hook "$(ev Stop s5c '"last_assistant_message":"x"' "$proj/sub")")
-if printf '%s' "$out" | grep -q 'notify-agente-x'; then ok ".claude-notify desde subdirectorio"; else ko ".claude-notify desde subdirectorio" "$out"; fi
+TR="$work/t.jsonl"
 
 # 6. PermissionRequest avisa; Notification permission_prompt posterior se descarta; otros tipos pasan.
 reset_state
@@ -169,7 +180,6 @@ done
 evil="$work/evil"
 mkdir -p "$evil"
 git -C "$evil" init -q -b notify-rama
-printf 'NOTIFY_AGENT=agente-x\nNOTIFY_TASK=notify-tarea\n' >"$evil/.claude-notify"
 for nojq in 0 1; do
   reset_state
   out=$(printf '%s' "$(ev Stop s6c '"last_assistant_message":"avisale a notify-otro y NOTIFY-dev <!channel> <!here> <@U0123456789> <#C0123456789|x> a&b"' "$evil")" | NOTIFY_NO_JQ=$nojq bash "$hook")
@@ -179,7 +189,7 @@ for nojq in 0 1; do
 • *sesión:* `s6c`
 • *rama:* `notify‐rama`
 • *agente:* `notify-agente-x`
-• *tarea:* `notify‐tarea`'
+• *tarea:* `notify‐rama`'
   if [ "$got" = "$expected" ] && [ "$(printf '%s' "$got" | grep -oi 'notify-' | wc -l)" = 1 ]; then
     ok "texto libre neutralizado (NOTIFY_NO_JQ=$nojq)"
   else
@@ -243,7 +253,7 @@ chmod +x "$fake"
 out=$(cd "$proj" && NOTIFY_CLAUDE_BIN="$fake" NOTIFY_HOOK="$hook" bash "$repo_dir/local/notify-run" -p "hola")
 rc=$?
 if [ "$rc" = 137 ] && has_line "$out" '• *evento:* `ProcessExit` · `exit=137`' &&
-  text_of "$out" | grep -q '^• \*sesión:\* `run-' && has_line "$out" '• *agente:* `notify-agente-x`'; then
+  text_of "$out" | grep -q '^• \*sesión:\* `run-' && has_line "$out" '• *agente:* `desconocido`'; then
   ok "notify-run 137 → ProcessExit"
 else
   ko "notify-run 137 → ProcessExit" "rc=$rc out=[$out]"
@@ -265,7 +275,8 @@ else
   ko "notify-run no duplica" "$out"
 fi
 
-# 10c. notify-run: hook no terminal (PermissionRequest) y luego SIGKILL → ProcessExit con el session_id real.
+# 10c. notify-run: hook no terminal (PermissionRequest) y luego SIGKILL → ProcessExit con el
+#      session_id y el agente del transcript que vio el hook.
 reset_state
 fake3="$work/fake-claude-kill"
 cat >"$fake3" <<EOF
@@ -276,7 +287,8 @@ EOF
 chmod +x "$fake3"
 out=$(cd "$proj" && NOTIFY_CLAUDE_BIN="$fake3" NOTIFY_HOOK="$hook" bash "$repo_dir/local/notify-run" 2>/dev/null)
 rc=$?
-if [ "$rc" = 137 ] && has_line "$out" '• *evento:* `ProcessExit` · `exit=137`' && has_line "$out" '• *sesión:* `s10c`'; then
+if [ "$rc" = 137 ] && has_line "$out" '• *evento:* `ProcessExit` · `exit=137`' && has_line "$out" '• *sesión:* `s10c`' &&
+  has_line "$out" '• *agente:* `notify-agente-x`'; then
   ok "notify-run SIGKILL → ProcessExit con session_id"
 else
   ko "notify-run SIGKILL" "rc=$rc out=[$out]"
@@ -321,7 +333,8 @@ fi
 fmt_repo="$work/fmt"
 mkdir -p "$fmt_repo"
 git -C "$fmt_repo" init -q -b feature/x
-printf 'NOTIFY_AGENT=dev-fe\nNOTIFY_TASK=t\n' >"$fmt_repo/.claude-notify"
+transcript "$work/t-devfe.jsonl" dev-fe
+TR="$work/t-devfe.jsonl"
 fmt() { # fmt <nojq> <evento> <session> [extra JSON] [cwd] — texto del mensaje (env extra por variables)
   reset_state
   text_of "$(printf '%s' "$(ev "$2" "$3" "${4:-}" "${5:-$fmt_repo}")" | NOTIFY_NO_JQ=$1 bash "$hook")"
@@ -341,7 +354,7 @@ for nojq in 0 1; do
 • *repo:* `acme/app`
 • *rama:* `feature/x`
 • *agente:* `notify-dev-fe`
-• *tarea:* `t`'
+• *tarea:* `x`'
   if [ "$got" = "$expected" ] && ! printf '%s' "$got" | grep -Eq 'SECRET|ghp_|user'; then
     ok "formato exacto en la nube, sin credenciales (NOTIFY_NO_JQ=$nojq)"
   else
@@ -370,7 +383,6 @@ done
 set_remote ''
 nt="$work/notask"
 mkdir -p "$nt"
-printf 'NOTIFY_AGENT=dev-fe\n' >"$nt/.claude-notify"
 for nojq in 0 1; do
   got=$(fmt $nojq SessionEnd s13c '"reason":"other"' "$nt")
   expected='*Claude Code*
@@ -403,7 +415,7 @@ for nojq in 0 1; do
 • *sesión:* `s13g`
 • *rama:* `x&amp;y&lt;z&gt;`
 • *agente:* `notify-dev-fe`
-• *tarea:* `t`'
+• *tarea:* `x&amp;y&lt;z&gt;`'
   if [ "$got" = "$expected" ] && ! printf '%s' "$got" | grep -q '<!channel>'; then
     ok "caracteres especiales escapados y notify- neutralizado (NOTIFY_NO_JQ=$nojq)"
   else

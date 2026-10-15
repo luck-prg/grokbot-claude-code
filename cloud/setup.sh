@@ -10,8 +10,9 @@
 #   - Network secret: Bearer para el host slack.com con el token xoxb- del bot.
 #     El proxy inyecta el header Authorization solo en requests de la sesión
 #     (no en las de este setup script), así que acá no se prueba el envío.
-#   - Variables de entorno: SLACK_NOTIFY_CHANNEL=C0123456789 (id del canal) y,
-#     si el environment es de un solo agente, NOTIFY_AGENT=<slug>.
+#   - Variables de entorno: SLACK_NOTIFY_CHANNEL=C0123456789 (id del canal).
+#     A quién avisar sale de la línea `notify: <slug>` del prompt; NOTIFY_AGENT=<slug>
+#     queda como fallback opcional (environment de un solo agente).
 #
 # Nunca hace fallar el setup: si algo sale mal, lo dice y sigue.
 
@@ -35,6 +36,13 @@ cat >"$hook" <<'GROKBOT_NOTIFY_SH_EOF'
 #   • *agente:* `notify-<agente>`
 #   • *tarea:* `t`
 #
+# A quién avisar (agente), en orden:
+#   1. la línea `notify: <slug>` del primer mensaje del usuario en el transcript
+#      (transcript_path del JSON del hook); en mensajes posteriores no cuenta;
+#   2. NOTIFY_AGENT del entorno;
+#   3. si no hay ninguno, igual avisa con agente `desconocido`, sin keyword notify- (no despierta a nadie).
+# La tarea es la rama sin el prefijo feature/, hotfix/ o release/ (sin rama, se omite).
+#
 # Nunca bloquea ni hace fallar a Claude: siempre sale con 0 y no escribe JSON en stdout.
 #
 # Variables (env o ~/.config/grokbot-claude-code/env):
@@ -43,7 +51,7 @@ cat >"$hook" <<'GROKBOT_NOTIFY_SH_EOF'
 #   SLACK_NOTIFY_USERNAME nombre con el que se publica (default "Claude Code")
 #   SLACK_NOTIFY_ICON_URL ícono con el que se publica (default el de la app de Claude)
 #                         Los dos necesitan el scope chat:write.customize; sin él Slack los ignora.
-#   NOTIFY_AGENT / NOTIFY_TASK  fallback si no hay archivo .claude-notify
+#   NOTIFY_AGENT          fallback si el primer mensaje no trae la línea `notify: <slug>`
 #   NOTIFY_SESSION_START=1      también avisa en SessionStart (apagado por defecto)
 #   DRY_RUN=1             imprime el payload en vez de mandarlo
 #   NOTIFY_NO_JQ=1        fuerza el parseo sin jq (para tests; jq es casi obligatorio)
@@ -210,8 +218,9 @@ repo_slug() {
 #   • *rama:* `x`
 #   • *agente:* `notify-slug`
 #   • *tarea:* `t`
-# Los campos vacíos (o `-`) se omiten con su línea. El único notify-<slug> real es el
-# del agente; el texto variable se neutraliza.
+# Los campos vacíos (o `-`) se omiten con su línea, salvo el agente: sin agente sale
+# `desconocido`, sin keyword. El único notify-<slug> real es el del agente; el texto
+# variable se neutraliza.
 format_message() {
   local event="$1" detail="$2" session="$3" agent="$4" task="$5" branch="$6" repo="$7"
   local nl=$'\n' b='• ' out url id f name val
@@ -231,7 +240,10 @@ format_message() {
 
   for f in "repo|$repo" "rama|$branch" "agente|$agent" "tarea|$task"; do
     name="${f%%|*}" val="${f#*|}"
-    case "$val" in '' | '-') continue ;; esac
+    case "$name|$val" in
+      'agente|' | 'agente|-') out+="$nl$b*agente:* \`desconocido\`"; continue ;;
+      *'|' | *'|-') continue ;;
+    esac
     if [ "$name" = agente ]; then
       # Literal: es el keyword que matchea la routine (el slug ya viene saneado).
       out+="$nl$b*agente:* \`notify-$val\`"
@@ -263,28 +275,85 @@ load_config() {
   return 0
 }
 
-# read_notify_file <archivo> <clave>: lee KEY=valor sin ejecutar el archivo.
-read_notify_file() {
-  [ -r "$1" ] || return 0
-  sed -nE 's/^[[:space:]]*(export[[:space:]]+)?'"$2"'=["'"'"']?([^"'"'"']*)["'"'"']?[[:space:]]*$/\2/p' "$1" | tail -n 1
+# first_user_text <transcript>: texto del primer mensaje del usuario del transcript JSONL
+# (primera línea "type":"user" que no sea isMeta ni isSidechain ni un tool_result).
+# message.content puede ser un string o un array de bloques; se juntan los bloques text.
+first_user_text() {
+  [ -r "$1" ] && [ -f "$1" ] || return 0
+  if have_jq; then
+    jq -nrR 'first(inputs | fromjson? | objects
+      | select(.type == "user" and .isMeta != true and .isSidechain != true)
+      | .message.content
+      | if type == "string" then .
+        elif type == "array" then
+          if any(.[]; type == "object" and .type == "tool_result") then empty
+          else [.[] | select(type == "object" and .type == "text") | .text | strings] | join("\n")
+          end
+        else empty
+        end)' "$1" 2>/dev/null
+    return 0
+  fi
+  # Sin jq: heurística sobre la primera línea que cumpla; toma los valores string de
+  # "content" y "text" y desescapa \n, \t, \" y \\ (\uXXXX queda tal cual).
+  awk '
+    function unesc(s,   out, i, c, n) {
+      out = ""; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+          c = substr(s, ++i, 1)
+          if (c == "n") c = "\n"; else if (c == "t") c = "\t"; else if (c == "r") c = "\r"
+          else if (c == "u") c = "\\u"
+        }
+        out = out c
+      }
+      return out
+    }
+    !/(^|[^\\])"type"[[:space:]]*:[[:space:]]*"user"/ { next }
+    /(^|[^\\])"isMeta"[[:space:]]*:[[:space:]]*true/ { next }
+    /(^|[^\\])"isSidechain"[[:space:]]*:[[:space:]]*true/ { next }
+    /(^|[^\\])"type"[[:space:]]*:[[:space:]]*"tool_result"/ { next }
+    {
+      line = $0; n = length(line); ins = esc = after = pending = capture = 0; last = ""
+      for (i = 1; i <= n; i++) {
+        c = substr(line, i, 1)
+        if (ins) {
+          if (esc) esc = 0
+          else if (c == "\\") esc = 1
+          else if (c == "\"") {
+            ins = 0; v = substr(line, start, i - start)
+            if (capture) { print unesc(v); capture = 0 } else { last = v; after = 1 }
+          }
+          continue
+        }
+        if (c == "\"") { ins = 1; start = i + 1; capture = pending; pending = 0; continue }
+        if (c == ":" && after && (last == "content" || last == "text")) { pending = 1; after = 0; continue }
+        if (c !~ /[ \t\r]/) { after = 0; pending = 0 }
+      }
+      exit
+    }' "$1" 2>/dev/null
 }
 
-resolve_target() {
-  local dir="$1" root file
-  AGENT="" TASK=""
-  root=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || root=""
-  for file in "$dir/.claude-notify" ${root:+"$root/.claude-notify"}; do
-    if [ -r "$file" ]; then
-      AGENT=$(read_notify_file "$file" NOTIFY_AGENT)
-      TASK=$(read_notify_file "$file" NOTIFY_TASK)
-      break
-    fi
-  done
+# transcript_agent <transcript>: slug de la línea `notify: <slug>` del primer mensaje del usuario.
+transcript_agent() {
+  first_user_text "$1" |
+    sed -nE 's/^[[:space:]]*notify:[[:space:]]*([a-z0-9-]+)[[:space:]]*$/\1/p' | head -n 1
+}
+
+# branch_task <rama>: la rama sin el prefijo gitflow (feature/, hotfix/, release/).
+branch_task() {
+  case "$1" in
+    feature/* | hotfix/* | release/*) printf '%s' "${1#*/}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# resolve_agent <transcript>: deja el slug en AGENT (vacío si no hay): la línea notify:
+# del transcript y, si no está, NOTIFY_AGENT.
+resolve_agent() {
+  AGENT=$(transcript_agent "$1")
   [ -n "$AGENT" ] || AGENT="${NOTIFY_AGENT:-}"
-  [ -n "$TASK" ] || TASK="${NOTIFY_TASK:-}"
   AGENT=$(slug "$AGENT")
-  TASK=$(slug "$TASK")
-  [ -n "$TASK" ] || TASK="-"
 }
 
 marker() { printf '%s/%s/%s' "$STATE_DIR" "$(slug "$SESSION_ID")" "$1"; }
@@ -354,8 +423,9 @@ main() {
 
   SESSION_ID=$(json_get session_id)
   [ -n "$SESSION_ID" ] || SESSION_ID="unknown"
-  local cwd prompt_id turn
+  local cwd prompt_id turn transcript
   cwd=$(json_get cwd)
+  transcript=$(json_get transcript_path)
   if [ -z "$cwd" ] || [ ! -d "$cwd" ]; then
     cwd="$PWD"
   fi
@@ -364,12 +434,7 @@ main() {
 
   if [ -n "${NOTIFY_RUN_ID:-}" ] && [ "$event" != "ProcessExit" ]; then
     mkdir -p "$STATE_DIR" 2>/dev/null &&
-      printf '%s\n' "$SESSION_ID" >"$STATE_DIR/run-$(slug "$NOTIFY_RUN_ID").session" 2>/dev/null
-  fi
-
-  resolve_target "$cwd"
-  if [ -z "$AGENT" ]; then
-    return 0
+      printf '%s\n%s\n' "$SESSION_ID" "$transcript" >"$STATE_DIR/run-$(slug "$NOTIFY_RUN_ID").session" 2>/dev/null
   fi
 
   local detail="" terminal=0 key="$event"
@@ -440,16 +505,21 @@ main() {
     return 0
   fi
 
-  local session="$SESSION_ID" branch text repo
+  local session="$SESSION_ID" branch task text repo
   if [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] && [ -n "${CLAUDE_CODE_REMOTE_SESSION_ID:-}" ]; then
     session="https://claude.ai/code/$(slug "$CLAUDE_CODE_REMOTE_SESSION_ID")"
   fi
-  branch=$(git -C "$cwd" symbolic-ref --short -q HEAD 2>/dev/null ||
-    git -C "$cwd" rev-parse --short HEAD 2>/dev/null) || branch="-"
-  [ -n "$branch" ] || branch="-"
+  # Sin rama (HEAD detached): se muestra el commit y no hay tarea.
+  task=""
+  if branch=$(git -C "$cwd" symbolic-ref --short -q HEAD 2>/dev/null) && [ -n "$branch" ]; then
+    task=$(branch_task "$branch")
+  else
+    branch=$(git -C "$cwd" rev-parse --short HEAD 2>/dev/null) || branch=""
+  fi
   repo=$(repo_slug "$(git -C "$cwd" remote get-url origin 2>/dev/null)")
+  resolve_agent "$transcript"
 
-  text=$(format_message "$event" "$detail" "$session" "$AGENT" "$TASK" "$branch" "$repo")
+  text=$(format_message "$event" "$detail" "$session" "$AGENT" "$task" "$branch" "$repo")
 
   # Las marcas de dedup van después de un envío exitoso: si falla, el próximo evento reintenta.
   send "$text" || return 0

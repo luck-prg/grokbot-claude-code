@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # grokbot-claude-code: corre Claude Code y avisa si terminó sin que ningún hook avisara.
 #
-# Uso:  notify-run -p "Leé BRIEF.md y hacelo..." [otros args de claude]
+# Uso:  notify-run -p "notify: <slug>
+#       Leé BRIEF.md y hacelo..." [otros args de claude]
 # Los argumentos se pasan tal cual a `claude`. Sale con el mismo código que claude.
 #
 # Los hooks cubren el fin normal, errores de API y la mayoría de las salidas, pero
@@ -52,14 +53,17 @@ done
 trap - INT TERM HUP
 
 if [ ! -e "$state_dir/run-$run_slug.notified" ] && [ -n "$hook" ]; then
-  session="run-$run_slug"
+  session="run-$run_slug" transcript=""
+  # El hook guarda ahí el session_id (línea 1) y el transcript_path (línea 2) que vio.
   if [ -r "$state_dir/run-$run_slug.session" ]; then
     session=$(head -n 1 "$state_dir/run-$run_slug.session")
+    transcript=$(sed -n 2p "$state_dir/run-$run_slug.session")
   fi
+  json_str() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
   msg="claude salió sin que ningún hook avisara"
   [ "$code" -gt 128 ] && msg="$msg (señal $((code - 128)))"
-  printf '{"hook_event_name":"ProcessExit","session_id":"%s","cwd":"%s","exit_code":%d,"message":"%s"}\n' \
-    "$session" "$(printf '%s' "$PWD" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')" "$code" "$msg" |
+  printf '{"hook_event_name":"ProcessExit","session_id":"%s","transcript_path":"%s","cwd":"%s","exit_code":%d,"message":"%s"}\n' \
+    "$(json_str "$session")" "$(json_str "$transcript")" "$(json_str "$PWD")" "$code" "$msg" |
     bash "$hook" || true
 fi
 

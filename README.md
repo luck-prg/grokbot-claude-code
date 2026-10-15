@@ -10,7 +10,7 @@ Los agentes de Grok Bot delegan código a Claude Code —por defecto en la nube 
 
 ```mermaid
 flowchart LR
-  A[Agente Grok Bot] -- "push + claude --cloud (por defecto)<br/>o BRIEF.md + .claude-notify + notify-run (local)" --> C[Claude Code<br/>nube o local]
+  A[Agente Grok Bot] -- "push + claude --cloud 'notify: slug' (por defecto)<br/>o BRIEF.md + notify-run (local)" --> C[Claude Code<br/>nube o local]
   C -- "hooks: Stop, StopFailure,<br/>Notification, PermissionRequest, SessionEnd" --> N[notify.sh]
   W[notify-run] -. "ProcessExit si ningún hook avisó<br/>(SIGKILL, OOM, crash)" .-> N
   N -- "chat.postMessage<br/>token chat:write<br/>+ chat:write.customize" --> S[(Slack<br/>#<canal>)]
@@ -26,7 +26,7 @@ Mensaje publicado:
 • *repo:* `owner/name`
 • *rama:* `feature/x`
 • *agente:* `notify-dev-fe`
-• *tarea:* `t`
+• *tarea:* `x`
 ```
 
 Se publica como un solo campo `text` (sin `blocks`), así el keyword `notify-<slug>` queda en el texto que matchea la routine. Un campo por línea, el mismo texto sirve para personas, scripts y agentes:
@@ -35,7 +35,7 @@ Se publica como un solo campo `text` (sin `blocks`), así el keyword `notify-<sl
 - **`evento`:** siempre. Si hay detalle va en un segundo span en la misma línea: `error=rate_limit` (StopFailure), `type=permission_prompt` (Notification), `tool=Bash` (PermissionRequest), `reason=other` (SessionEnd), `exit=137` (ProcessExit).
 - **`sesión`:** en la nube, link a la sesión cuyo texto es el id: `<https://claude.ai/code/session_xxx|session_xxx>`; en local, el `session_id` en código (`` `id` ``).
 - **`repo`:** `owner/name` del `git remote get-url origin` (soporta https y ssh, quita `.git` y nunca muestra credenciales ni host).
-- **`rama`**, **`agente`** (`notify-<slug>`, el keyword de la routine) y **`tarea`**.
+- **`rama`**, **`agente`** (`notify-<slug>`, el keyword de la routine; `desconocido` si no se sabe) y **`tarea`** (la rama sin el prefijo `feature/`, `hotfix/` o `release/`: `feature/x` → `x`; otra rama queda igual; sin rama, p.ej. HEAD detached, no hay tarea).
 - Los campos vacíos o `-` se omiten con su línea (p.ej. sin remote no hay `*repo:*`).
 
 **Cómo parsearlo:** cada línea después del título es `• *<campo>:* <valor>` (regex `^• \*([^*]+):\* (.*)$`); el valor va entre backticks o, en `sesión` en la nube, como `<url|session_xxx>` (la URL es lo que está entre `<` y `|`; el texto del link, entre `|` y `>`, es el id de sesión). La routine identifica al agente por la línea `*agente:*` `` `notify-<slug>` ``.
@@ -48,14 +48,16 @@ Se publica como un solo campo `text` (sin `blocks`), así el keyword `notify-<sl
 
 `username` (default `Claude Code`, se cambia con `SLACK_NOTIFY_USERNAME`) e `icon_url` (default `https://claude.ai/images/claude_app_icon.png`, se cambia con `SLACK_NOTIFY_ICON_URL`) van siempre, con y sin `jq`. Para que Slack los use, el bot necesita el scope **`chat:write.customize`**; sin él Slack los ignora **sin dar error** y el mensaje sale con el nombre e ícono de la app.
 
-**A quién avisar:** archivo `.claude-notify` en la carpeta de trabajo o en la raíz del repo/worktree, escrito por el agente al lanzar la tarea:
+**A quién avisar:** el prompt de la tarea lleva una línea sola `notify: <agent-slug>`, p.ej.:
 
 ```
-NOTIFY_AGENT=<agent-slug>
-NOTIFY_TASK=<nombre-de-la-tarea>
+notify: dev-fe
+Arreglá el login roto. No toques la base. Commiteá y hacé push de la rama.
 ```
 
-Si no existe, se usan las variables de entorno `NOTIFY_AGENT` / `NOTIFY_TASK`. Si no hay agente, no se envía nada.
+El hook lee el `transcript_path` del JSON del hook y busca esa línea (`^[[:space:]]*notify:[[:space:]]*([a-z0-9-]+)[[:space:]]*$`) en el **primer** mensaje del usuario de la sesión (se saltean los mensajes meta, de sidechain y los `tool_result`; el contenido puede ser texto o bloques `text`). Una línea `notify:` en un mensaje posterior no cuenta. No hace falta crear archivos ni variables por tarea, así que funciona igual en la nube y en local, y varias sesiones en la misma rama pueden avisar a agentes distintos.
+
+Si el primer mensaje no la trae, se usa la variable de entorno `NOTIFY_AGENT`. Si tampoco está, **igual se avisa**, con `` • *agente:* `desconocido` `` y sin ningún keyword `notify-`: el aviso queda en el canal pero no despierta a nadie.
 
 El único `notify-` real del mensaje es el keyword de la línea `*agente:*`: en el resto (tarea, rama, repo, detalle) cada `notify-` se reemplaza por `notify‐` (guion U+2010) y `&`, `<`, `>` se escapan, así una tarea o una rama no pueden despertar a otro agente ni hacer ping con `<!channel>`, `<@U…>` o `<#C…>`.
 
@@ -70,9 +72,10 @@ El único `notify-` real del mensaje es el keyword de la línea `*agente:*`: en 
 | `local/check-slugs` | Chequea una lista de slugs (formato, duplicados y colisión por substring entre `notify-<a>` y `notify-<b>`). Sale 0 ok, 1 con problemas, 2 sin slugs. |
 | `cloud/setup.sh` | Setup script auto-contenido para environments de claude.ai/code (embebe `notify.sh`). Generado con `bash cloud/build.sh`. |
 | `cloud/build.sh` | Regenera `cloud/setup.sh`; con `--check` falla si quedó desactualizado. |
-| `skill/claude-code-task/SKILL.md` | Skill de Grok Bot actualizada: nube por defecto (`claude --cloud`), local (worktree + `notify-run`) como fallback, `.claude-notify`, routine, sin polling. |
+| `skill/claude-code-task/SKILL.md` | Skill de Grok Bot actualizada: nube por defecto (`claude --cloud`), local (worktree + `notify-run`) como fallback, línea `notify: <slug>` en el prompt, routine, sin polling. |
 | `skill/claude-code-notify-setup/SKILL.md` | Skill de onboarding: le pregunta al usuario canal, channel id y bots; flujo coordinador (varios bots) o por agente; slugs chequeados con `local/check-slugs`, routine, memoria y una prueba por bot. |
 | `tests/simulate.sh` | Simulación de eventos contra el hook sin red (`DRY_RUN=1`). |
+| `tests/test-transcript-agent.sh` | Agente desde la línea `notify:` del transcript (fixtures en `tests/fixtures/`), fallbacks y tarea desde la rama, con y sin `jq`. |
 | `tests/test-scripts.sh` | POST real del hook contra un servidor HTTP falso local, `notify-run`, `local/install.sh` (+ `--uninstall`), `cloud/build.sh` y `cloud/setup.sh` en un HOME temporal. |
 | `tests/test-check-slugs.sh` | Casos de `local/check-slugs`. |
 | `tests/lint-skills.sh` | Frontmatter de las skills, rutas del repo citadas, placeholders, canal sin hardcodear y nube por defecto en la skill de tareas. |
@@ -98,10 +101,10 @@ En la configuración del environment:
 
 1. **Network access:** *Custom*, permitir `slack.com` (y dejar los package managers por defecto).
 2. **Network secret:** tipo Bearer para el host `slack.com`, con el token `xoxb-...`. El proxy de Anthropic inyecta el header `Authorization` en las requests de la sesión. Los secretos matchean **solo por host**, no por path, y el proxy **no** los agrega a requests del setup script (no intentes probar el envío ahí). Cuando no hay `SLACK_NOTIFY_TOKEN` en el env y `CLAUDE_CODE_REMOTE=true`, el hook no manda su propio header.
-3. **Variables de entorno:** `SLACK_NOTIFY_CHANNEL=C0123456789` y, si el environment es de un solo agente, `NOTIFY_AGENT=<agent-slug>`.
+3. **Variables de entorno:** `SLACK_NOTIFY_CHANNEL=C0123456789`. Opcional: `NOTIFY_AGENT=<agent-slug>` como fallback si el environment es de un solo agente (la línea `notify:` del prompt gana).
 4. **Setup script:** pegá entero el contenido de [`cloud/setup.sh`](cloud/setup.sh). Escribe el hook y mergea `~/.claude/settings.json` dentro de la VM.
 
-`.claude-notify` no viaja a la nube porque no se commitea: usá `NOTIFY_AGENT` en el environment o pedile a Claude, al inicio del prompt, que cree `.claude-notify` sin commitearlo.
+A quién avisar va en el propio prompt (línea `notify: <agent-slug>`), así que no hay nada que crear dentro de la VM.
 
 **Verificado en una sesión real de la nube (2026-10-14), de punta a punta:**
 
@@ -125,11 +128,12 @@ $EDITOR ~/.config/grokbot-claude-code/env   # SLACK_NOTIFY_TOKEN=xoxb-... y SLAC
 
 Opcionales en el mismo archivo o en el entorno: `SLACK_NOTIFY_USERNAME` y `SLACK_NOTIFY_ICON_URL` (ver el payload arriba). Las variables `SLACK_NOTIFY_TOKEN` / `SLACK_NOTIFY_CHANNEL` / `SLACK_NOTIFY_USERNAME` / `SLACK_NOTIFY_ICON_URL` del entorno ganan sobre el archivo. El hook envía el token por un descriptor de archivo, no por la línea de comandos (no aparece en `ps`).
 
-Probar sin red (en una carpeta temporal, para no dejar un `.claude-notify` suelto en `/tmp`):
+Probar sin red, con un transcript mínimo cuyo primer mensaje trae `notify: prueba`:
 
 ```bash
-d=$(mktemp -d) && cd "$d" && printf 'NOTIFY_AGENT=prueba\nNOTIFY_TASK=demo\n' > .claude-notify
-echo "{\"session_id\":\"s1\",\"cwd\":\"$d\",\"hook_event_name\":\"Stop\",\"last_assistant_message\":\"hola\"}" \
+d=$(mktemp -d)
+printf '{"type":"user","message":{"role":"user","content":"hola\\nnotify: prueba"}}\n' > "$d/t.jsonl"
+echo "{\"session_id\":\"s1\",\"transcript_path\":\"$d/t.jsonl\",\"cwd\":\"$d\",\"hook_event_name\":\"Stop\"}" \
   | DRY_RUN=1 bash ~/.claude/hooks/grokbot-notify.sh
 ```
 
@@ -205,7 +209,7 @@ Configurá las notificaciones de Claude Code para vos, con el flujo por agente d
 2. Preguntame el nombre del canal de avisos (#<canal>) y su channel id (estilo C0123456789), y confirmá conmigo tu slug (proponé uno: <slug>). Preguntame qué notify-... ya se usan en el canal.
 3. Chequeá tu slug contra los ya usados con: bash ~/grokbot-claude-code/local/check-slugs <slug> <slug-ya-usado> ... Si sale 1 (colisión por substring, p.ej. notify-dev vs notify-dev-ml), proponé otro.
 4. Verificá que ~/.config/grokbot-claude-code/env tenga modo 600 y SLACK_NOTIFY_CHANNEL con el id que te di. Si SLACK_NOTIFY_TOKEN sigue en xoxb-REPLACE_ME, pedímelo por un canal seguro; no lo escribas en ningún repo ni mensaje.
-5. Creá tu routine con trigger {type:'slack', channel:'#<canal>', match:{kind:'keyword', keyword:'notify-<slug>'}} con la instrucción de la skill (confirma la línea *agente:* y lee los campos • *<campo>:* del aviso) y guardá en tu memoria slug, keyword y canal (NOTIFY_AGENT=<slug> al lanzar tareas).
+5. Creá tu routine con trigger {type:'slack', channel:'#<canal>', match:{kind:'keyword', keyword:'notify-<slug>'}} con la instrucción de la skill (confirma la línea *agente:* y lee los campos • *<campo>:* del aviso) y guardá en tu memoria slug, keyword y canal (al lanzar tareas, el prompt lleva una línea sola "notify: <slug>").
 6. Reemplazá tu skill claude-code-task por ~/grokbot-claude-code/skill/claude-code-task/SKILL.md (nube por defecto: push de la rama + claude --cloud; local con notify-run solo como fallback).
 7. Hacé UNA sola prueba con el bot de notificaciones (vía el hook, como dice la skill) y reportame keyword, canal y si tu routine disparó. Si no, revisá ${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log.
 No hagas polling, no mergees, no hagas push de nada en este repo.
@@ -215,9 +219,9 @@ No hagas polling, no mergees, no hagas push de nada en este repo.
 
 El primer lugar para mirar es `${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log` (en la nube, dentro de la VM de la sesión).
 
-- **No llega nada y `notify.log` no registra el evento.**
-  *Causa:* no hay agente: ni `.claude-notify` (en la carpeta de trabajo o en la raíz del repo/worktree) ni `NOTIFY_AGENT` en el entorno. En ese caso el hook sale 0 en silencio, sin loguear. En la nube pasa seguido porque `.claude-notify` no se commitea y no viaja.
-  *Solución:* creá `.claude-notify` con `NOTIFY_AGENT=<agent-slug>` o, en la nube, poné `NOTIFY_AGENT` en las variables del environment (o pedile a Claude al inicio del prompt que cree el archivo sin commitearlo).
+- **El aviso llega con `` • *agente:* `desconocido` `` y no despierta a nadie.**
+  *Causa:* el primer mensaje del prompt no tenía una línea sola `notify: <agent-slug>` (p.ej. venía pegada a otro texto, con mayúsculas o espacios en el slug, como `\n` escrito en vez de un salto de línea real, o recién en un mensaje posterior), y no hay `NOTIFY_AGENT` en el entorno.
+  *Solución:* relanzá la tarea con la línea `notify: <agent-slug>` sola en el primer mensaje (minúsculas, números y guiones).
 - **`notify.log` dice `sin SLACK_NOTIFY_TOKEN` o `sin SLACK_NOTIFY_CHANNEL`.**
   *Causa:* `~/.config/grokbot-claude-code/env` sigue con el placeholder `xoxb-REPLACE_ME` (el hook lo trata como vacío) o falta el channel id. En la nube es normal que no haya token en la VM (lo inyecta el proxy), pero el hook solo envía sin token propio si `CLAUDE_CODE_REMOTE=true`.
   *Solución:* en local, completá `SLACK_NOTIFY_TOKEN` y `SLACK_NOTIFY_CHANNEL` en ese archivo (modo 600). En la nube, definí `SLACK_NOTIFY_CHANNEL` en las variables del environment y el network secret Bearer para `slack.com` ([paso 2](#2-nube-claudeaicode-environments-por-defecto)).
@@ -225,7 +229,7 @@ El primer lugar para mirar es `${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-
   *Causa:* el bot de notificaciones no es miembro del canal privado, `SLACK_NOTIFY_CHANNEL` tiene el nombre (`#<canal>`) en vez del id (`C0123456789`), o el token es inválido.
   *Solución:* `/invite @<tu-app>` en `#<canal>`, usá el channel id y revisá el token. Como la marca de dedup se escribe solo si el envío salió bien, el próximo evento vuelve a intentar.
 - **El aviso aparece en el canal pero la routine del agente no dispara.**
-  *Causa:* `@Cursor` (la app que dispara las routines de Grok Bot) no está invitada al canal privado y no ve los mensajes, o el keyword de la routine no coincide con la línea `*agente:*` `` `notify-<slug>` `` (el hook convierte a `-` todo carácter fuera de `A-Za-z0-9_.-` del `NOTIFY_AGENT`).
+  *Causa:* `@Cursor` (la app que dispara las routines de Grok Bot) no está invitada al canal privado y no ve los mensajes, o el keyword de la routine no coincide con la línea `*agente:*` `` `notify-<slug>` `` (el slug de la línea `notify:` tiene que ser `[a-z0-9-]+`; en los fallbacks, el hook convierte a `-` todo carácter fuera de `A-Za-z0-9_.-` del `NOTIFY_AGENT`).
   *Solución:* `/invite @Cursor` en `#<canal>` y compará el keyword de la routine con el que muestra el aviso. Para probar, seguí la skill [`claude-code-notify-setup`](skill/claude-code-notify-setup/SKILL.md): una sola prueba, sin reintentar en loop.
 - **Se despierta otro agente además del correcto.**
   *Causa:* colisión por substring: la routine matchea el keyword como substring, así que `notify-dev` también salta con un aviso para `notify-dev-ml`.
@@ -245,7 +249,7 @@ Verificado con `claude -p` real en Linux (Stop + dedup de SessionEnd, Stop en pa
 | `--max-turns`, SIGINT/SIGTERM, salida sin Stop | `SessionEnd` · `reason=<motivo>` (timeout del hook 10 s; el default de SessionEnd es 1.5 s). |
 | SIGKILL / OOM / crash (con `notify-run`) | `ProcessExit` · `exit=<código>` (p.ej. 137), con el session_id si algún hook llegó a verlo. |
 | Subagentes | Nada: se descarta todo evento con `agent_id`. No se usa `SubagentStop`. |
-| Sin `.claude-notify` ni `NOTIFY_AGENT` | Nada (exit 0). |
+| Sin línea `notify:` en el primer mensaje ni `NOTIFY_AGENT` | El aviso igual, con agente `desconocido` y sin keyword `notify-` (no despierta a nadie). |
 
 El hook nunca bloquea ni hace fallar a Claude: siempre sale 0 y no escribe JSON de decisión en stdout. Estado de dedup y log en `${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/` (privado del usuario, no en `/tmp`). La marca de dedup se escribe solo si el envío salió bien.
 
@@ -270,8 +274,9 @@ Todo corre sin red y sin tokens reales, con un `HOME` temporal (no toca tu `~/.c
 | :- | :- |
 | `tests/simulate.sh` | Eventos de Claude Code contra el hook en `DRY_RUN` (formato exacto con y sin `jq`, con y sin URL, campos vacíos, caracteres especiales, dedup, subagentes, neutralizado de texto, fallback sin `jq`, `notify-run`, `cloud/setup.sh`, `local/install.sh`). |
 | `tests/test-scripts.sh` | POST real del hook contra un servidor HTTP falso en `127.0.0.1` (`python3`), apuntado con `SLACK_API_URL`: canal, texto exacto, keyword y header `Authorization` (y sin `Authorization` propio en la nube, con la sesión como link). `notify-run` con un `claude` falso (exit 137 → `ProcessExit`; Stop → sin `ProcessExit`). `local/install.sh` idempotente y `--uninstall`. `cloud/build.sh --check` y build en una copia. `cloud/setup.sh` en un HOME limpio, idempotente. |
+| `tests/test-transcript-agent.sh` | Agente desde la línea `notify:` del primer mensaje del usuario en transcripts de prueba (`tests/fixtures/`: content string y array, sin línea, línea en un mensaje posterior, dos transcripts en la misma rama), fallbacks `NOTIFY_AGENT` → `desconocido` sin keyword, y tarea desde la rama (`feature/`, `hotfix/`, `release/`, rama sin prefijo, HEAD detached), con y sin `jq`. |
 | `tests/test-check-slugs.sh` | `local/check-slugs`: set válido, `notify-dev` vs `notify-dev-ml`, duplicados, mayúsculas/espacios, prefijo `notify-`, stdin y sin input. |
-| `tests/lint-skills.sh` | Frontmatter de cada skill (`name` = carpeta, `description`), rutas del repo citadas en skills y README existen, sin ids/tokens con pinta de reales, regla de colisión y `local/check-slugs` en la skill de setup, sin canal hardcodeado (solo `#<canal>`), y la skill `claude-code-task` declara la nube por defecto (`claude --cloud`) y local como fallback. |
+| `tests/lint-skills.sh` | Frontmatter de cada skill (`name` = carpeta, `description`), rutas del repo citadas en skills y README existen, sin ids/tokens con pinta de reales, regla de colisión y `local/check-slugs` en la skill de setup, sin canal hardcodeado (solo `#<canal>`), la skill `claude-code-task` declara la nube por defecto (`claude --cloud`) y local como fallback, las skills piden la línea `notify: <slug>`, y ningún archivo trackeado menciona el viejo archivo de configuración por carpeta ni la variable de tarea eliminada. |
 | `tests/secret-scan.sh` | Archivos trackeados y no ignorados (`git ls-files -co --exclude-standard`): tokens `xox*`, ids de canal/usuario, webhooks y sesiones con pinta de reales. Solo se permiten los placeholders (`C0123456789`, `U0123456789`, `xoxb-REPLACE_ME`). |
 
 `SLACK_API_URL` (en `hooks/notify.sh`) es solo una perilla de test: en uso real no se toca.
