@@ -2,13 +2,16 @@
 name: claude-code-task
 description: >-
   Usar cuando un bot quiere delegar una tarea de código en un repo a Claude Code y
-  enterarse por Slack cuando termina o necesita input, sin hacer polling. Por defecto
-  corre en la nube (`claude --cloud`); local en la computadora compartida (worktree +
-  notify-run) solo como fallback.
+  enterarse por Slack cuando termina o necesita input, sin hacer polling. También para
+  continuar, mandarle un mensaje o leer una sesión existente de Claude Code en la nube.
+  Por defecto corre en la nube (`claude --cloud`); local (worktree + notify-run) solo
+  como fallback.
 ---
 # Correr una tarea con Claude Code
 
 Claude Code está instalado en la computadora compartida (`~/.local/bin/claude`) y ya tiene la sesión iniciada con la cuenta de Claude del dueño. Cualquier bot lo puede usar. **Por defecto la tarea corre en la nube** (`claude --cloud`); la ejecución local queda como fallback.
+
+**Si delegás a un subagente o ejecutor:** copiale tal cual los comandos de esta skill que apliquen (lanzar, continuar, leer). Nunca concluyas que algo no se puede solo por `claude --help`: primero mirá esta skill (ver "Continuar o leer una sesión").
 
 Cuando Claude termina, falla o necesita input, un hook publica en el canal privado `#<canal>`:
 
