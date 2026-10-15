@@ -32,6 +32,12 @@ Mensaje publicado:
 • *tarea:* `x`
 ```
 
+<img width="517" height="590" alt="image" src="https://github.com/user-attachments/assets/0d6bf9d9-2aab-46ed-950e-26627649bf4e" />
+
+<img width="508" height="362" alt="image" src="https://github.com/user-attachments/assets/0a2951c3-a86e-492e-ae40-d66f784cd527" />
+
+<img width="597" height="465" alt="image" src="https://github.com/user-attachments/assets/d4d29903-36d0-4e78-b70e-9909f8c859b7" />
+
 Se publica como un solo campo `text` (sin `blocks`), así el keyword `notify-<slug>` queda en el texto que matchea la routine. Un campo por línea, el mismo texto sirve para personas, scripts y agentes:
 
 - **Título:** siempre `*Claude Code*` (sin emoji ni viñeta). Cada línea de campo empieza con `• ` (U+2022 + espacio).
