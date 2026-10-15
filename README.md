@@ -85,6 +85,19 @@ El único `notify-` real del mensaje es el keyword de la línea `*agente:*`: en 
 
 ## Setup
 
+### 0. Claude Code en la computadora de los bots
+
+La computadora es **compartida por todos los bots**: se instala y se loguea una sola vez y la usan todos.
+
+1. Instalá la CLI con el instalador oficial nativo (Linux/macOS/WSL; se actualiza solo):
+   ```
+   curl -fsSL https://claude.ai/install.sh | bash
+   ```
+   Deja el lanzador en `~/.local/bin/claude` (tiene que estar en el `PATH`).
+2. Verificá: `claude --version` imprime algo como `2.1.xxx (Claude Code)`. Para un diagnóstico más completo: `claude doctor`.
+3. Login con la cuenta de Claude del dueño (Pro, Max, Team o Enterprise), **una sola vez**, en la pantalla del bot: corré `claude` y seguí el login en el navegador (o `claude auth login`). Los bots no inician sesión por su cuenta.
+4. Conectá GitHub para la nube: dentro de `claude`, corré `/web-setup` (manda tu token de `gh` a la cuenta de Claude; si no tenés environment, crea el *Default*). Alternativa: instalar la Claude GitHub App desde claude.ai/code.
+
 ### 1. Slack
 
 1. Creá un canal **privado** `#<canal>` y anotá su channel id (`C0123456789`; en Slack: detalles del canal → abajo de todo).
@@ -96,6 +109,10 @@ El token solo puede escribir en canales donde el bot es miembro, así que si se 
 ### 2. Nube (claude.ai/code environments, por defecto)
 
 Es el modo por defecto: el agente hace push de la rama y lanza `claude --cloud "<tarea>"` desde la carpeta del repo (desde un bot, que no tiene TTY: `script -qec 'claude --cloud "<tarea>"' /dev/null </dev/null`). Requiere GitHub conectado a la cuenta de Claude (`/web-setup` dentro de `claude`).
+
+El environment se crea en claude.ai/code, en la pantalla de nueva sesión: el selector de environment es el primer control de la fila debajo de la caja de mensaje → *New environment* (para editar uno existente: su fila bajo *Cloud* → ícono de configuración). Sugerencia de nombre: `<nombre-entorno>` (p.ej. `grokbot-notify`).
+
+Duda: según la documentación, la CLI elige el environment con `/remote-env` (lo guarda en `remote.defaultEnvironmentId` de tus settings) y, si no elegiste, cae al environment alojado por Anthropic o al primero de la lista. No probamos `/remote-env` en esta computadora; si el aviso no llega, revisalo ahí.
 
 En la configuración del environment:
 
@@ -112,6 +129,16 @@ A quién avisar va en el propio prompt (línea `notify: <agent-slug>`), así que
 - El network secret (Bearer para `slack.com`) **sí** se inyecta en la request que hace el hook durante la sesión: el aviso llegó al canal sin `SLACK_NOTIFY_TOKEN` en el env de la VM.
 - La variable de entorno `SLACK_NOTIFY_CHANNEL` del environment llega al setup script, que la escribe en `~/.config/grokbot-claude-code/env`; con eso alcanza para el canal.
 - El aviso real llevó un session id en `*sesión:*`. El hook igual mantiene el fallback: `https://claude.ai/code/$CLAUDE_CODE_REMOTE_SESSION_ID` si esa variable existe, si no el `session_id` del JSON del hook.
+
+**Elegir el modelo** (verificado con Claude Code 2.1.300):
+- Listar los disponibles, sin interacción: `timeout 60 claude -p '/model' </dev/null` (imprime el modelo actual y los alias: `sonnet`, `opus`, `haiku`, ..., `default` o un id completo).
+- El agente le muestra esa lista al usuario para que elija antes de arrancar.
+- Pasarlo al lanzar en la nube (verificado: el transcript de la sesión de la nube registra el modelo del alias):
+  ```
+  script -qec 'claude --model <alias> --cloud "notify: <agent-slug>
+  <tarea>"' /dev/null </dev/null
+  ```
+- Duda: si se puede cambiar el modelo de una sesión que ya existe.
 
 ### 3. Local (computadora compartida, fallback)
 
