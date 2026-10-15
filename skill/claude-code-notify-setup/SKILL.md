@@ -10,7 +10,10 @@ description: >-
 Los hooks de Claude Code (local o nube) publican en el canal de avisos un mensaje así:
 
 ```
-[claude] notify-<slug> event=<evento> task=<tarea> session=<id|url> branch=<rama> summary=<resumen>
+🤖 *Claude Code* · `Stop` · <url|sesión>
+repo `owner/name` · rama `<rama>` · agente `notify-<slug>` · tarea `<tarea>`
+> <resumen de una línea>
+notify-<slug> event=<evento> task=<tarea> session=<id|url> branch=<rama>
 ```
 
 Cada agente tiene una routine que despierta solo con **su** keyword `notify-<slug>`. Esta skill la corrés una vez por agente. Para lanzar tareas después, usá la skill `claude-code-task`.
@@ -34,7 +37,7 @@ Creá en vos mismo (si no existe ya) una routine con este trigger:
 
 Instrucción de la routine:
 
-> Llegó un aviso de Claude Code. Leé el mensaje y sacá `event=`, `task=`, `session=`, `branch=` y `summary=`. Buscá la tarea por `task=` y seguí "Al recibir el aviso" de la skill claude-code-task: continuá la tarea o reportá el resultado a quien la pidió. No cambies nada fuera del alcance de esa tarea.
+> Llegó un aviso de Claude Code. Leé la última línea del mensaje (`notify-<slug> event=... task=... session=... branch=...`) y sacá `event=`, `task=`, `session=` y `branch=`; el resumen es la línea que empieza con `>` (puede faltar). Buscá la tarea por `task=` y seguí "Al recibir el aviso" de la skill claude-code-task: continuá la tarea o reportá el resultado a quien la pidió. No cambies nada fuera del alcance de esa tarea.
 
 Requisito: `@Cursor` tiene que estar invitado a `#<canal-de-avisos>` (es la app que dispara las routines; si no ve el canal, la routine nunca salta). Si no está, pedíselo al dueño.
 
