@@ -41,8 +41,10 @@ cat >"$hook" <<'GROKBOT_NOTIFY_SH_EOF'
 #                         (default ${XDG_STATE_HOME:-$HOME/.local/state}/grokbot-claude-code)
 #   NOTIFY_CONFIG         ruta alternativa del archivo de config
 #   NOTIFY_RUN_ID         lo pone local/notify-run para saber si algún hook ya avisó
+#   SLACK_API_URL         endpoint de chat.postMessage; perilla para tests (p.ej. apuntar
+#                         a un servidor falso local, ver tests/test-scripts.sh). No tocar en uso real.
 
-SLACK_API_URL="https://slack.com/api/chat.postMessage"
+SLACK_API_URL="${SLACK_API_URL:-https://slack.com/api/chat.postMessage}"
 SUMMARY_MAX=200
 
 # Estado y log por usuario, nunca en un /tmp compartido.

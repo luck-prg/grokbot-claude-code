@@ -7,6 +7,11 @@
 #   (idempotente; deja backup settings.json.bak-<fecha>)
 # - Crea ~/.config/grokbot-claude-code/env (modo 600) con placeholders si no existe
 #
+# Uso: bash local/install.sh               instala (o actualiza)
+#      bash local/install.sh --uninstall   borra el hook, notify-run y las entradas de
+#                                          grokbot-notify.sh en settings.json (conserva el
+#                                          resto); no toca ~/.config/grokbot-claude-code/env
+#
 # Requiere jq. Respeta CLAUDE_CONFIG_DIR y BIN_DIR.
 
 set -euo pipefail
@@ -18,9 +23,43 @@ config_dir="$HOME/.config/grokbot-claude-code"
 hook_dst="$claude_dir/hooks/grokbot-notify.sh"
 settings="$claude_dir/settings.json"
 
+mode=install
+case "${1:-}" in
+  "") ;;
+  --uninstall) mode=uninstall ;;
+  *)
+    echo "uso: bash local/install.sh [--uninstall]" >&2
+    exit 2
+    ;;
+esac
+
 if ! command -v jq >/dev/null 2>&1; then
   echo "error: falta jq (apt install jq / brew install jq)" >&2
   exit 1
+fi
+
+if [ "$mode" = uninstall ]; then
+  rm -f "$hook_dst" "$bin_dir/notify-run"
+  echo "borrado:    $hook_dst"
+  echo "borrado:    $bin_dir/notify-run"
+  if [ -s "$settings" ]; then
+    cp "$settings" "$settings.bak-$(date +%Y%m%d%H%M%S)"
+    tmp=$(mktemp "$settings.XXXXXX")
+    # Saca los hooks de grokbot-notify.sh, los grupos que quedan vacíos y los eventos sin grupos.
+    jq '
+      if (.hooks | type) == "object" then
+        .hooks |= (map_values(
+            map(.hooks |= map(select((.command // "") | contains("grokbot-notify.sh") | not)))
+            | map(select((.hooks | length) > 0)))
+          | with_entries(select((.value | length) > 0)))
+        | if .hooks == {} then del(.hooks) else . end
+      else . end
+    ' "$settings" >"$tmp"
+    mv "$tmp" "$settings"
+    echo "settings:   $settings (entradas de grokbot-notify.sh quitadas)"
+  fi
+  echo "config:     $config_dir/env (se dejó como estaba; borralo a mano si ya no lo usás)"
+  exit 0
 fi
 
 mkdir -p "$claude_dir/hooks" "$bin_dir"
