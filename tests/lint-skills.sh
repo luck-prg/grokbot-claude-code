@@ -5,7 +5,8 @@
 #   `.github/...` y links relativos) existen;
 # - sin valores con pinta de reales (ids de canal/usuario, tokens, webhooks, sesiones);
 # - la skill de setup tiene la regla de colisión por substring y menciona local/check-slugs;
-# - sin canal hardcodeado: el único canal permitido es #<canal>.
+# - sin canal hardcodeado: el único canal permitido es #<canal>;
+# - la skill de tareas declara la nube por defecto (`claude --cloud`) y local como fallback.
 # Uso: bash tests/lint-skills.sh   — sale ≠0 si falla algún caso.
 
 set -u
@@ -122,6 +123,18 @@ if [ -z "$bad_ph" ] && grep -qF '#<canal>' "${skills[@]}"; then
 else
   ko "skills con otro placeholder de canal" "$bad_ph"
 fi
+
+# 7. Skill de tareas: la nube es el modo por defecto y local es el fallback.
+task=skill/claude-code-task/SKILL.md
+missing_cloud=""
+grep -qE '^## .*nube.*por defecto' "$task" || missing_cloud+="falta un heading de pasos en la nube 'por defecto'"$'\n'
+grep -qF -- 'claude --cloud' "$task" || missing_cloud+="falta 'claude --cloud'"$'\n'
+grep -qF -- "script -qec 'claude --cloud" "$task" || missing_cloud+="falta el lanzamiento sin TTY con script -qec"$'\n'
+grep -qE '^## .*[Ll]ocal.*fallback' "$task" || missing_cloud+="falta un heading de alternativa local 'fallback'"$'\n'
+desc_task=$(awk 'NR > 1 && $0 == "---" { exit } NR > 1 { print }' "$task")
+printf '%s\n' "$desc_task" | grep -q 'nube' || missing_cloud+="la description no menciona la nube"$'\n'
+printf '%s\n' "$desc_task" | grep -q 'fallback' || missing_cloud+="la description no menciona local como fallback"$'\n'
+if [ -z "$missing_cloud" ]; then ok "skill de tareas: nube por defecto, local como fallback"; else ko "skill de tareas: nube por defecto" "$missing_cloud"; fi
 
 echo
 echo "pasaron: $pass  fallaron: $fail"

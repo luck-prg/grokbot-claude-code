@@ -9,7 +9,7 @@ description: >-
 ---
 # Configurar agentes para recibir avisos de Claude Code
 
-Los hooks de Claude Code (local o nube) publican en el canal de avisos un mensaje así:
+Los hooks de Claude Code (en la nube, por defecto, o local como fallback) publican en el canal de avisos un mensaje así:
 
 ```
 *Claude Code*
@@ -30,7 +30,7 @@ Cada agente tiene una routine que despierta solo con **su** keyword `notify-<slu
 Nada de esto viene fijo en la skill: el canal y los bots son los del usuario de Grok Bot.
 
 1. **Nombre del canal de avisos** (`#<canal>`): el canal privado donde publica el bot de notificaciones.
-2. **Channel id** de ese canal (estilo `C0123456789`; en Slack: detalles del canal → abajo de todo). Es el valor de `SLACK_NOTIFY_CHANNEL` (local en `~/.config/grokbot-claude-code/env`, nube en las variables del environment).
+2. **Channel id** de ese canal (estilo `C0123456789`; en Slack: detalles del canal → abajo de todo). Es el valor de `SLACK_NOTIFY_CHANNEL` (nube, por defecto: en las variables del environment; local: en `~/.config/grokbot-claude-code/env`).
 3. **Qué bots activar** (flujo coordinador) o confirmación de que sos vos (flujo por agente), y el **slug** de cada uno.
 4. **Los `notify-...` que ya se usan** en `#<canal>`, si el usuario los conoce (además, revisá el historial del canal si podés leerlo).
 
@@ -89,7 +89,7 @@ Usalo cuando el usuario te pide configurar a varios de sus bots de una.
 
 1. **Preguntá** al usuario: nombre del canal (`#<canal>`), channel id (`C0123456789`), la lista de bots a activar y un slug por bot (proponé uno si no lo tiene, y que lo confirme). Preguntá también qué `notify-...` ya existen en el canal.
 2. **Chequeá colisiones** sobre TODOS los slugs (nuevos + ya usados en el canal) con `local/check-slugs`. Si sale 1, ajustá con el usuario y repetí hasta que salga 0.
-3. **Config del hook:** confirmá que la máquina (o el environment de la nube) tiene `SLACK_NOTIFY_CHANNEL` con el channel id que te dieron (ver README del repo). El token no lo toques vos si no te lo pidieron.
+3. **Config del hook:** confirmá que el environment de la nube (por defecto) y la máquina compartida (fallback local) tienen `SLACK_NOTIFY_CHANNEL` con el channel id que te dieron (ver README del repo). El token no lo toques vos si no te lo pidieron.
 4. **Mandale las instrucciones a cada bot:**
    - Si tenés `SendToAgent`, mandale a cada bot el **prompt por agente** de abajo con su canal y su slug ya completos.
    - Si no, dale al usuario un prompt listo para copiar y pegar por bot (el mismo, completo), uno por bot.
@@ -110,7 +110,7 @@ Configurate para que te despierten los avisos de Claude Code (skill claude-code-
 - Canal de avisos: #<canal>
 - Tu slug: <slug> (keyword notify-<slug>). Ya está chequeado contra colisión por substring con los demás slugs.
 1) Creá en vos una routine con trigger {"type":"slack","channel":"#<canal>","match":{"kind":"keyword","keyword":"notify-<slug>"}} cuya instrucción confirme la línea *agente:* `notify-<slug>`, lea los campos del aviso (una línea por campo, • *<campo>:* <valor>, valor entre backticks o <url|session_xxx>: evento, tarea, sesión, rama) y siga "Al recibir el aviso" de la skill claude-code-task, sin cambiar nada fuera del alcance de la tarea.
-2) Guardá en tu memoria el slug, el keyword y el canal; usá NOTIFY_AGENT=<slug> al lanzar tareas.
+2) Guardá en tu memoria el slug, el keyword y el canal; usá NOTIFY_AGENT=<slug> al lanzar tareas (por defecto en la nube con claude --cloud; local solo como fallback).
 3) No hagas la prueba vos: avisame cuando la routine esté creada y yo mando una sola prueba.
 No pegues tokens en el chat ni en ningún repo. No hagas polling.
 ```
@@ -120,6 +120,6 @@ No pegues tokens en el chat ni en ningún repo. No hagas polling.
 1. **Preguntá** al usuario el nombre del canal (`#<canal>`) y su channel id (`C0123456789`), y **confirmá** tu slug (proponé uno si no te lo dieron). Preguntá qué `notify-...` ya se usan en el canal.
 2. **Chequeá colisiones** con `local/check-slugs` pasando tu slug y todos los ya usados. Si sale 1, proponé otro y repetí.
 3. **Creá tu routine** (ver "Routine") si no existe ya.
-4. **Guardá en tu memoria** tu slug (`<slug>`), tu keyword (`notify-<slug>`) y el canal. Al lanzar cada tarea con Claude Code, usá el slug **sin** el prefijo: `NOTIFY_AGENT=<slug>` en `.claude-notify` (local) o como variable del environment (nube). Ver la skill `claude-code-task`.
+4. **Guardá en tu memoria** tu slug (`<slug>`), tu keyword (`notify-<slug>`) y el canal. Al lanzar cada tarea con Claude Code, usá el slug **sin** el prefijo: `NOTIFY_AGENT=<slug>` como variable del environment o en el `.claude-notify` que crea Claude al empezar (nube, por defecto), o en `.claude-notify` (local, fallback). Ver la skill `claude-code-task`.
 5. **Probá** con **una** sola prueba (ver "Prueba").
 6. **Reportá** al usuario: keyword `notify-<slug>`, canal, si la prueba disparó (sí/no) y cualquier problema. Nunca pegues tokens en el reporte.
