@@ -103,6 +103,26 @@ Leé los campos `*evento:*`, `*tarea:*`, `*sesión:*` y `*rama:*`; el mensaje no
 - `StopFailure`: error de API (`error=rate_limit`, `authentication_failed`, `billing_error`, ...). Ver "Si falla".
 - `SessionEnd` (sin Stop previo) o `ProcessExit` · `exit=<código>`: el proceso terminó sin cerrar el turno (p.ej. `--max-turns`, señal, SIGKILL=137, OOM). En la nube, abrí la sesión y revisá la rama; en local, revisá `run.log` y el estado de la carpeta antes de decidir.
 
+## Continuar o leer una sesión (nube)
+Probado con Claude Code 2.1.300. `<id>` es el id de la sesión (`cse_...` o `session_...`, el texto del link de `*sesión:*`); también acepta la URL `claude.ai/code/...`. Siempre con `timeout` y `</dev/null` para no colgarse.
+
+- **Mandar un mensaje** (follow-up) a una sesión existente: encola el mensaje y sale al instante, **sin esperar la respuesta**. Desde cualquier carpeta, con la cuenta logueada:
+  ```
+  timeout 90 claude -p $'notify: <slug>\n<mensaje>' --cloud <id> --output-format json </dev/null
+  ```
+  Salida: `{"ok":true,"session_id":"<id>","url":"https://claude.ai/code/<id>?..."}` (con `ok:false` y `error` si la sesión no existe o está archivada). Poné `notify: <slug>` como primera línea: cuando Claude termina ese turno salta tu routine y llega un aviso `Stop` a Slack, como en el lanzamiento. Sin `-p`, `--cloud <id>` falla ("Attaching to an existing cloud session is not enabled").
+- **Leer la conversación** (qué dijo Claude último): desde un clon **limpio** del mismo repo (sin cambios sin commitear), con `--teleport` y `-p`. Trae el historial y la rama de la sesión y responde la pregunta en local:
+  ```
+  cd /workspace/cc/<repo> && timeout 180 claude -p --teleport <id> "Sin usar herramientas ni cambiar archivos: citá textualmente el último mensaje del usuario y tu última respuesta." </dev/null
+  ```
+  La respuesta corre en una **copia local** de la sesión: no llega a la sesión de la nube ni dispara avisos. Hace checkout de la rama de la sesión en ese clon.
+- Esperá el aviso `Stop` de Slack antes de leer: justo después de que Claude responde, el historial que trae `--teleport` puede no tener todavía el último turno (pasó una vez; al repetir minutos después sí estaba).
+
+Dudas (sin probar):
+- `--resume` no sirve para sesiones de la nube (según la documentación solo lee el historial local de esta computadora).
+- No hay comando de CLI documentado para listar sesiones de la nube de forma no interactiva: `claude --teleport` sin id abre un selector interactivo (no usarlo desde un bot). El id sale del aviso de Slack o de claude.ai/code.
+- No probado: `claude -p --teleport` con `--output-format json`, ni sobre sesiones archivadas o con el environment vencido.
+
 ## Si falla
 - Error de sesión o de cuenta: avisá al dueño; no intentes iniciar sesión vos.
 - Límite de uso: avisá y no reintentes en loop.
