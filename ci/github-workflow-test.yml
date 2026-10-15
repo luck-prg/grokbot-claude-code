@@ -1,0 +1,21 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar dependencias
+        run: sudo apt-get update && sudo apt-get install -y jq shellcheck
+      - name: shellcheck
+        run: shellcheck hooks/notify.sh local/notify-run local/install.sh local/check-slugs cloud/*.sh tests/*.sh
+      - name: tests
+        run: bash tests/run-all.sh

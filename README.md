@@ -50,12 +50,20 @@ El único `notify-` real del mensaje es el keyword del principio: en el resto (r
 | :- | :- |
 | `hooks/notify.sh` | El hook. Lee el JSON de stdin, filtra, deduplica y publica. Siempre sale 0. Usa `jq`; sin `jq` tiene un fallback con `sed`/`awk` pensado como red de seguridad, no como modo normal. |
 | `hooks/settings.json` | Bloque `hooks` para `~/.claude/settings.json` o `.claude/settings.json`. |
-| `local/install.sh` | Instalación local: copia el hook a `~/.claude/hooks/grokbot-notify.sh`, `notify-run` a `~/.local/bin`, mergea los hooks con `jq` sin pisar lo existente y crea `~/.config/grokbot-claude-code/env` (modo 600) con placeholders. |
+| `local/install.sh` | Instalación local: copia el hook a `~/.claude/hooks/grokbot-notify.sh`, `notify-run` a `~/.local/bin`, mergea los hooks con `jq` sin pisar lo existente y crea `~/.config/grokbot-claude-code/env` (modo 600) con placeholders. `--uninstall` los saca. |
 | `local/notify-run` | Wrapper de `claude` (argumentos tal cual). Si al salir ningún hook avisó, publica `event=ProcessExit exit=<código>`. |
+| `local/check-slugs` | Chequea una lista de slugs (formato, duplicados y colisión por substring entre `notify-<a>` y `notify-<b>`). Sale 0 ok, 1 con problemas, 2 sin slugs. |
 | `cloud/setup.sh` | Setup script auto-contenido para environments de claude.ai/code (embebe `notify.sh`). Generado con `bash cloud/build.sh`. |
+| `cloud/build.sh` | Regenera `cloud/setup.sh`; con `--check` falla si quedó desactualizado. |
 | `skill/claude-code-task/SKILL.md` | Skill de Grok Bot actualizada: flujos local y nube, `.claude-notify`, `notify-run`, routine, sin polling. |
-| `skill/claude-code-notify-setup/SKILL.md` | Skill de onboarding (una vez por agente): elegir `notify-<slug>`, crear la routine, guardarlo en memoria y probar que dispara. |
-| `tests/simulate.sh` | Tests sin red (`DRY_RUN=1`). |
+| `skill/claude-code-notify-setup/SKILL.md` | Skill de onboarding: le pregunta al usuario canal, channel id y bots; flujo coordinador (varios bots) o por agente; slugs chequeados con `local/check-slugs`, routine, memoria y una prueba por bot. |
+| `tests/simulate.sh` | Simulación de eventos contra el hook sin red (`DRY_RUN=1`). |
+| `tests/test-scripts.sh` | POST real del hook contra un servidor HTTP falso local, `notify-run`, `local/install.sh` (+ `--uninstall`), `cloud/build.sh` y `cloud/setup.sh` en un HOME temporal. |
+| `tests/test-check-slugs.sh` | Casos de `local/check-slugs`. |
+| `tests/lint-skills.sh` | Frontmatter de las skills, rutas del repo citadas, placeholders y canal sin hardcodear. |
+| `tests/secret-scan.sh` | Busca tokens/ids con pinta de reales en los archivos del repo. |
+| `tests/run-all.sh` | Corre todos los tests y resume. |
+| `ci/github-workflow-test.yml` | CI: `shellcheck` + `bash tests/run-all.sh` en cada PR y push a `main`. Movelo a .github/workflows/test.yml para activarlo. |
 
 ## Setup
 
@@ -69,26 +77,35 @@ El token solo puede escribir en canales donde el bot es miembro, así que si se 
 
 ### 2. Local (computadora compartida)
 
+Requisitos: `git`, `bash`, `curl` y **`jq`** (en la práctica obligatorio: `local/install.sh` lo usa para mergear los hooks y el hook para parsear el JSON; el fallback sin `jq` cubre los casos de los tests, pero no es un parser JSON completo). `python3` solo para los tests.
+
 ```bash
-git clone <este-repo> ~/grokbot-claude-code
-bash ~/grokbot-claude-code/local/install.sh
-chmod 600 ~/.config/grokbot-claude-code/env
+git clone https://github.com/luck-prg/grokbot-claude-code ~/grokbot-claude-code
+bash ~/grokbot-claude-code/local/install.sh          # deja el env en modo 600
 $EDITOR ~/.config/grokbot-claude-code/env   # SLACK_NOTIFY_TOKEN=xoxb-... y SLACK_NOTIFY_CHANNEL=C...
 ```
 
-**`jq` es en la práctica obligatorio**: `local/install.sh` lo usa para mergear los hooks y el hook lo usa para parsear el JSON. El fallback sin `jq` cubre los casos de los tests, pero no es un parser JSON completo.
+`notify-run` queda en `~/.local/bin` (o en `BIN_DIR`). Si `command -v notify-run` no lo encuentra, agregá `export PATH="$HOME/.local/bin:$PATH"` a tu shell o usá la ruta completa. Correr el instalador de nuevo es seguro (no duplica hooks ni pisa el env). Para desinstalar: `bash ~/grokbot-claude-code/local/install.sh --uninstall`.
 
 Las variables `SLACK_NOTIFY_TOKEN` / `SLACK_NOTIFY_CHANNEL` del entorno ganan sobre el archivo. El hook envía el token por un descriptor de archivo, no por la línea de comandos (no aparece en `ps`).
 
-Probar sin red:
+Probar sin red (en una carpeta temporal, para no dejar un `.claude-notify` suelto en `/tmp`):
 
 ```bash
-cd /tmp && printf 'NOTIFY_AGENT=prueba\nNOTIFY_TASK=demo\n' > .claude-notify
-echo '{"session_id":"s1","cwd":"/tmp","hook_event_name":"Stop","last_assistant_message":"hola"}' \
+d=$(mktemp -d) && cd "$d" && printf 'NOTIFY_AGENT=prueba\nNOTIFY_TASK=demo\n' > .claude-notify
+echo "{\"session_id\":\"s1\",\"cwd\":\"$d\",\"hook_event_name\":\"Stop\",\"last_assistant_message\":\"hola\"}" \
   | DRY_RUN=1 bash ~/.claude/hooks/grokbot-notify.sh
 ```
 
+Para probar el envío HTTP completo (headers incluidos) sin tocar Slack, apuntá el hook a un servidor falso local con `SLACK_API_URL=http://127.0.0.1:<puerto>/api/chat.postMessage` (perilla solo para tests; ver `tests/test-scripts.sh`).
+
 Sin `DRY_RUN` publica de verdad. Log: `${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log` (directorio privado del usuario, creado con `umask 077`; se cambia con `NOTIFY_STATE_DIR`).
+
+Desinstalar (borra el hook, `notify-run` y las entradas de `grokbot-notify.sh` en `settings.json`, conservando el resto y dejando backup; **no** toca `~/.config/grokbot-claude-code/env`):
+
+```bash
+bash ~/grokbot-claude-code/local/install.sh --uninstall
+```
 
 ### 3. Nube (claude.ai/code environments)
 
@@ -109,20 +126,24 @@ En la configuración del environment:
 
 ### 4. Onboarding de cada agente (routine)
 
-Cada agente Grok Bot se configura una vez con la skill [`skill/claude-code-notify-setup/SKILL.md`](skill/claude-code-notify-setup/SKILL.md): elige su slug, crea una routine con trigger Slack por keyword `notify-<slug>`, lo guarda en su memoria y prueba que dispara. Así solo despierta ese agente (filtro determinístico, sin LLM en el medio).
+Cada agente Grok Bot se configura una vez con la skill [`skill/claude-code-notify-setup/SKILL.md`](skill/claude-code-notify-setup/SKILL.md): se le asigna un slug, crea una routine con trigger Slack por keyword `notify-<slug>`, lo guarda en su memoria y se prueba que dispara. Así solo despierta ese agente (filtro determinístico, sin LLM en el medio).
 
-**Regla de colisión por substring:** la routine matchea el keyword como substring del mensaje, así que el keyword de un agente no puede estar contenido en el de otro ni contenerlo. `notify-dev` y `notify-dev-ml` chocan: un aviso para `notify-dev-ml` despierta también a `notify-dev`. Antes de asignar slugs, revisá los `notify-...` que ya se usan en el canal.
+Nada viene fijo: el agente le **pregunta al usuario** el nombre del canal de avisos (`#<canal>`), su channel id (`C0123456789`, el valor de `SLACK_NOTIFY_CHANNEL`) y qué bots activar. Hay dos flujos:
+
+- **Coordinador:** un agente le pide al usuario el canal, la lista de bots y un slug por bot; chequea colisiones de todos los slugs (nuevos + ya usados en el canal) con `local/check-slugs`; a cada bot le manda las instrucciones con `SendToAgent` (si está disponible) o le da al usuario el prompt para pegarle; y al final hace **una** prueba por bot con el bot de notificaciones y reporta una tabla bot → keyword → disparó sí/no.
+- **Por agente:** el agente se configura solo: pregunta canal e id, confirma su slug, chequea colisiones, crea la routine, guarda la memoria, hace una prueba y reporta.
+
+**Regla de colisión por substring:** la routine matchea el keyword como substring del mensaje, así que el keyword de un agente no puede estar contenido en el de otro ni contenerlo. `notify-dev` y `notify-dev-ml` chocan: un aviso para `notify-dev-ml` despierta también a `notify-dev`. Chequealo con todos los slugs (los nuevos y los que ya se usan en el canal):
+
+```bash
+bash local/check-slugs <slug-1> <slug-2> <slug-ya-usado> ...   # o uno por línea por stdin
+```
+
+Sale 0 si está todo bien, 1 si hay problemas (formato `^[a-z0-9][a-z0-9-]*$`, duplicados o colisión por substring; los imprime) y 2 si no le pasaste slugs. Acepta los slugs con o sin el prefijo `notify-`.
 
 Requisito: `@Cursor` invitado al canal de avisos (paso 1).
 
-Prompt para mandarle a cada agente (completá `<canal>` y `<slug>`; usá un slug distinto por agente):
-
-```text
-Configurate para que te despierten los avisos de Claude Code, siguiendo la skill claude-code-notify-setup (skill/claude-code-notify-setup/SKILL.md del repo grokbot-claude-code).
-- Canal de avisos: #<canal>
-- Slug propuesto: <slug> (tu keyword sería notify-<slug>). Antes de usarlo, chequeá que no sea substring del keyword de otro agente ni contenga uno (p.ej. notify-dev vs notify-dev-ml chocan); mirá los notify-... que ya aparecen en #<canal> y, si hay duda, preguntá y proponé otro.
-Pasos: 1) confirmá el slug; 2) creá en vos una routine con trigger {"type":"slack","channel":"#<canal>","match":{"kind":"keyword","keyword":"notify-<slug>"}} cuya instrucción lea el aviso (la última línea trae event, task, session y branch; el resumen es la línea que empieza con `>`) y continúe o reporte la tarea sin cambiar nada fuera de su alcance; 3) guardá el slug en tu memoria y usalo como NOTIFY_AGENT al lanzar tareas; 4) hacé una sola prueba y confirmá que tu routine disparó; 5) reportame keyword, canal y resultado de la prueba.
-No pegues tokens en el chat ni en ningún repo. No hagas polling.
+Los prompts para arrancar cada flujo están en [PROMPT para que un agente Grok Bot replique el setup](#prompt-para-que-un-agente-grok-bot-replique-el-setup).
 
 ### 5. Skill
 
@@ -142,15 +163,32 @@ y exportá `NOTIFY_SESSION_START=1`. Para quitarlo, borrá ese bloque.
 
 ## PROMPT para que un agente Grok Bot replique el setup
 
-Copiá y pegá (completando los placeholders; el token pasalo por un canal seguro, no en el chat):
+Copiá y pegá el que corresponda. Los `<...>` los completa el agente preguntándote (o completalos vos antes de pegar). El token pasalo por un canal seguro, nunca en el chat.
+
+**Coordinador** (un agente configura a varios de tus bots):
 
 ```text
-Configurá las notificaciones de Claude Code para vos usando el repo grokbot-claude-code.
-1. Cloná el repo en ~/grokbot-claude-code (si ya existe, hacé git pull) y corré: bash ~/grokbot-claude-code/local/install.sh
-2. Verificá que ~/.config/grokbot-claude-code/env tenga modo 600 y que SLACK_NOTIFY_TOKEN y SLACK_NOTIFY_CHANNEL tengan valores reales (canal: C0123456789). Si el token sigue en xoxb-REPLACE_ME, pedíselo al dueño; no lo escribas en ningún repo ni mensaje.
-3. Tu slug es <agent-slug>. Seguí ~/grokbot-claude-code/skill/claude-code-notify-setup/SKILL.md para chequear que no colisione por substring con otro keyword y crear la routine con trigger {type:'slack', channel:'#<canal>', match:{kind:'keyword', keyword:'notify-<agent-slug>'}}.
-4. Reemplazá tu skill claude-code-task por ~/grokbot-claude-code/skill/claude-code-task/SKILL.md.
-5. Probá: en una carpeta temporal escribí .claude-notify con NOTIFY_AGENT=<agent-slug> y NOTIFY_TASK=prueba, y corré ahí: notify-run -p "Respondé solo: hola" < /dev/null. Confirmá que tu routine se disparó con event=Stop. Si no, revisá ${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log y avisá al dueño.
+Configurá las notificaciones de Claude Code para varios de mis bots, con el flujo coordinador de la skill claude-code-notify-setup del repo grokbot-claude-code.
+1. Cloná el repo en ~/grokbot-claude-code (si ya existe, hacé git pull). Si la máquina compartida todavía no tiene el hook, corré: bash ~/grokbot-claude-code/local/install.sh
+2. Preguntame: el nombre del canal de avisos (#<canal>), su channel id (estilo C0123456789, para SLACK_NOTIFY_CHANNEL), qué bots activar, un slug por bot y qué notify-... ya se usan en el canal. No adivines nada de esto.
+3. Chequeá todos los slugs (nuevos + ya usados) con: bash ~/grokbot-claude-code/local/check-slugs <slug-1> <slug-2> ... Si sale 1 (colisión por substring, p.ej. notify-dev vs notify-dev-ml), proponeme otros y repetí.
+4. Verificá que ~/.config/grokbot-claude-code/env tenga modo 600 y SLACK_NOTIFY_CHANNEL con el id que te di. Si SLACK_NOTIFY_TOKEN sigue en xoxb-REPLACE_ME, pedímelo por un canal seguro; no lo escribas en ningún repo ni mensaje.
+5. A cada bot mandale con SendToAgent (si lo tenés) el prompt por agente de la skill con su canal y slug completos; si no, dame ese prompt listo para que yo se lo pegue. Que creen la routine y guarden el slug en memoria, sin probar.
+6. Cuando cada bot confirme, hacé exactamente UNA prueba por bot con el bot de notificaciones (vía el hook, como dice la skill) y reportame una tabla bot → keyword → disparó sí/no.
+No hagas polling, no mergees, no hagas push de nada en este repo.
+```
+
+**Por agente** (el agente se configura solo):
+
+```text
+Configurá las notificaciones de Claude Code para vos, con el flujo por agente de la skill claude-code-notify-setup del repo grokbot-claude-code.
+1. Cloná el repo en ~/grokbot-claude-code (si ya existe, hacé git pull). Si la máquina compartida todavía no tiene el hook, corré: bash ~/grokbot-claude-code/local/install.sh
+2. Preguntame el nombre del canal de avisos (#<canal>) y su channel id (estilo C0123456789), y confirmá conmigo tu slug (proponé uno: <slug>). Preguntame qué notify-... ya se usan en el canal.
+3. Chequeá tu slug contra los ya usados con: bash ~/grokbot-claude-code/local/check-slugs <slug> <slug-ya-usado> ... Si sale 1 (colisión por substring, p.ej. notify-dev vs notify-dev-ml), proponé otro.
+4. Verificá que ~/.config/grokbot-claude-code/env tenga modo 600 y SLACK_NOTIFY_CHANNEL con el id que te di. Si SLACK_NOTIFY_TOKEN sigue en xoxb-REPLACE_ME, pedímelo por un canal seguro; no lo escribas en ningún repo ni mensaje.
+5. Creá tu routine con trigger {type:'slack', channel:'#<canal>', match:{kind:'keyword', keyword:'notify-<slug>'}} con la instrucción de la skill (campos desde la última línea del aviso, resumen desde la línea que empieza con >) y guardá en tu memoria slug, keyword y canal (NOTIFY_AGENT=<slug> al lanzar tareas).
+6. Reemplazá tu skill claude-code-task por ~/grokbot-claude-code/skill/claude-code-task/SKILL.md.
+7. Hacé UNA sola prueba con el bot de notificaciones (vía el hook, como dice la skill) y reportame keyword, canal y si tu routine disparó. Si no, revisá ${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log.
 No hagas polling, no mergees, no hagas push de nada en este repo.
 ```
 
@@ -183,11 +221,25 @@ El hook nunca bloquea ni hace fallar a Claude: siempre sale 0 y no escribe JSON 
 ## Tests
 
 ```bash
-bash tests/simulate.sh
-shellcheck hooks/notify.sh local/notify-run local/install.sh cloud/build.sh cloud/setup.sh tests/simulate.sh
+bash tests/run-all.sh
+shellcheck hooks/notify.sh local/notify-run local/install.sh local/check-slugs cloud/*.sh tests/*.sh
 ```
 
+Todo corre sin red y sin tokens reales, con un `HOME` temporal (no toca tu `~/.claude` ni tu config). Cada archivo imprime `pasaron: N  fallaron: M` y sale ≠0 si algo falla; también se pueden correr sueltos:
+
+| Test | Qué cubre |
+| :- | :- |
+| `tests/simulate.sh` | Eventos de Claude Code contra el hook en `DRY_RUN` (formato, dedup, subagentes, neutralizado de texto, fallback sin `jq`, `notify-run`, `cloud/setup.sh`, `local/install.sh`). |
+| `tests/test-scripts.sh` | POST real del hook contra un servidor HTTP falso en `127.0.0.1` (`python3`), apuntado con `SLACK_API_URL`: canal, keyword y header `Authorization`. `notify-run` con un `claude` falso (exit 137 → `ProcessExit`; Stop → sin `ProcessExit`). `local/install.sh` idempotente y `--uninstall`. `cloud/build.sh --check` y build en una copia. `cloud/setup.sh` en un HOME limpio, idempotente. |
+| `tests/test-check-slugs.sh` | `local/check-slugs`: set válido, `notify-dev` vs `notify-dev-ml`, duplicados, mayúsculas/espacios, prefijo `notify-`, stdin y sin input. |
+| `tests/lint-skills.sh` | Frontmatter de cada skill (`name` = carpeta, `description`), rutas del repo citadas en skills y README existen, sin ids/tokens con pinta de reales, regla de colisión y `local/check-slugs` en la skill de setup, sin canal hardcodeado (solo `#<canal>`). |
+| `tests/secret-scan.sh` | Archivos trackeados y no ignorados (`git ls-files -co --exclude-standard`): tokens `xox*`, ids de canal/usuario, webhooks y sesiones con pinta de reales. Solo se permiten los placeholders (`C0123456789`, `U0123456789`, `xoxb-REPLACE_ME`). |
+
+`SLACK_API_URL` (en `hooks/notify.sh`) es solo una perilla de test: en uso real no se toca.
+
 Si cambiás `hooks/notify.sh` o `hooks/settings.json`, regenerá `cloud/setup.sh` con `bash cloud/build.sh` (el test falla si queda desactualizado).
+
+CI: [`ci/github-workflow-test.yml`](ci/github-workflow-test.yml) corre `shellcheck` y `bash tests/run-all.sh` en cada PR y en cada push a `main` (sin secretos). Para activarlo, movelo a .github/workflows/test.yml (pushear workflows requiere un token con scope `workflow`).
 
 ## Créditos
 
