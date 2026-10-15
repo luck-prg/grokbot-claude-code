@@ -6,7 +6,8 @@
 # - sin valores con pinta de reales (ids de canal/usuario, tokens, webhooks, sesiones);
 # - la skill de setup tiene la regla de colisión por substring y menciona local/check-slugs;
 # - sin canal hardcodeado: el único canal permitido es #<canal>;
-# - la skill de tareas declara la nube por defecto (`claude --cloud`) y local como fallback.
+# - la skill de tareas declara la nube por defecto (`claude --cloud`) y local como fallback;
+# - ninguna skill sugiere esperar con pgrep (solo se permite la regla que lo prohíbe).
 # Uso: bash tests/lint-skills.sh   — sale ≠0 si falla algún caso.
 
 set -u
@@ -135,6 +136,26 @@ desc_task=$(awk 'NR > 1 && $0 == "---" { exit } NR > 1 { print }' "$task")
 printf '%s\n' "$desc_task" | grep -q 'nube' || missing_cloud+="la description no menciona la nube"$'\n'
 printf '%s\n' "$desc_task" | grep -q 'fallback' || missing_cloud+="la description no menciona local como fallback"$'\n'
 if [ -z "$missing_cloud" ]; then ok "skill de tareas: nube por defecto, local como fallback"; else ko "skill de tareas: nube por defecto" "$missing_cloud"; fi
+
+# 8. Ninguna skill sugiere pgrep para esperar (pgrep -f se matchea a sí mismo y el bucle no
+#    termina). Una línea que nombra pgrep solo se acepta si es la prohibición: "nunca … pgrep"
+#    en la misma oración. La skill de tareas tiene que tener esa regla.
+pgrep_suggestions() {
+  grep -niE '(^|[^[:alnum:]_-])pgrep([^[:alnum:]_-]|$)' -- "$1" | grep -viE 'nunca[^.]*pgrep'
+}
+pgrep_tmp=$(mktemp -d)
+printf 'Nunca esperes con `pgrep -f`.\n' >"$pgrep_tmp/prohibe.md"
+printf 'Esperá con `while pgrep -f claude; do sleep 5; done`.\n' >"$pgrep_tmp/sugiere.md"
+pgrep_bad=""
+[ -z "$(pgrep_suggestions "$pgrep_tmp/prohibe.md")" ] || pgrep_bad+="autotest: la regla que lo prohíbe dispara el chequeo"$'\n'
+[ -n "$(pgrep_suggestions "$pgrep_tmp/sugiere.md")" ] || pgrep_bad+="autotest: un bucle con pgrep no dispara el chequeo"$'\n'
+rm -rf "$pgrep_tmp"
+for f in "${skills[@]}"; do
+  hits=$(pgrep_suggestions "$f")
+  [ -z "$hits" ] || pgrep_bad+="$f:"$'\n'"$hits"$'\n'
+done
+grep -qiE 'nunca[^.]*pgrep' "$task" || pgrep_bad+="$task: falta la regla 'nunca esperar con pgrep'"$'\n'
+if [ -z "$pgrep_bad" ]; then ok "skills no sugieren pgrep para esperar"; else ko "skills sugieren pgrep para esperar" "$pgrep_bad"; fi
 
 echo
 echo "pasaron: $pass  fallaron: $fail"
