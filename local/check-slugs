@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# grokbot-claude-code: chequea que los slugs de los agentes sirvan como keyword notify-<slug>.
+#
+# Uso:  check-slugs slug1 slug2 ...
+#       printf 'slug1\nslug2\n' | check-slugs      (uno por línea si no hay argumentos)
+#
+# Pasá TODOS los slugs: los nuevos y los que ya se usan en el canal. Acepta el slug
+# con o sin el prefijo notify-. Chequea:
+#   - formato ^[a-z0-9][a-z0-9-]*$ (minúsculas, números y guiones);
+#   - sin duplicados;
+#   - sin colisión por substring: la routine matchea el keyword como substring del
+#     mensaje, así que notify-<a> no puede contener a notify-<b> ni estar contenido
+#     (p.ej. notify-dev y notify-dev-ml chocan).
+#
+# Sale 0 si está todo bien, 1 si hay problemas (los imprime), 2 si no hay slugs.
+
+set -u
+
+slugs=()
+if [ "$#" -gt 0 ]; then
+  slugs=("$@")
+elif [ ! -t 0 ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    # Ignora líneas vacías y espacios al borde.
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -n "$line" ] && slugs+=("$line")
+  done
+fi
+
+if [ "${#slugs[@]}" -eq 0 ]; then
+  echo "uso: check-slugs slug1 slug2 ...  (o uno por línea por stdin)" >&2
+  exit 2
+fi
+
+problems=0
+problem() {
+  problems=$((problems + 1))
+  printf 'problema: %s\n' "$1"
+}
+
+valid=()
+for raw in "${slugs[@]}"; do
+  s="${raw#notify-}"
+  if ! [[ "$s" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    problem "slug inválido '$raw' (solo [a-z0-9-], empieza con letra o número)"
+    continue
+  fi
+  dup=0
+  for v in "${valid[@]}"; do
+    [ "$v" = "$s" ] && dup=1
+  done
+  if [ "$dup" = 1 ]; then
+    problem "slug duplicado '$s'"
+    continue
+  fi
+  valid+=("$s")
+done
+
+n=${#valid[@]}
+for ((i = 0; i < n; i++)); do
+  for ((j = i + 1; j < n; j++)); do
+    a="${valid[i]}" b="${valid[j]}"
+    if [[ "notify-$a" == *"notify-$b"* ]]; then
+      problem "colisión por substring: notify-$a contiene a notify-$b"
+    elif [[ "notify-$b" == *"notify-$a"* ]]; then
+      problem "colisión por substring: notify-$b contiene a notify-$a"
+    fi
+  done
+done
+
+if [ "$problems" -gt 0 ]; then
+  printf '%d problema(s)\n' "$problems"
+  exit 1
+fi
+printf 'ok: %d slug(s) sin colisiones\n' "$n"
+exit 0

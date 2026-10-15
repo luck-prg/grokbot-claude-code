@@ -1,0 +1,3 @@
+{"type":"user","sessionId":"00000000-0000-0000-0000-000000000000","message":{"role":"user","content":[{"type":"text","text":"Arreglá el login."}]},"uuid":"00000000-0000-0000-0000-000000000031"}
+{"type":"assistant","sessionId":"00000000-0000-0000-0000-000000000000","message":{"role":"assistant","content":[{"type":"text","text":"Ok."}]},"uuid":"00000000-0000-0000-0000-000000000032"}
+{"type":"user","sessionId":"00000000-0000-0000-0000-000000000000","message":{"role":"user","content":"notify: agente-tarde"},"uuid":"00000000-0000-0000-0000-000000000033"}
