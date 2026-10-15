@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# grokbot-claude-code: corre Claude Code y avisa si terminó sin que ningún hook avisara.
+#
+# Uso:  notify-run -p "Leé BRIEF.md y hacelo..." [otros args de claude]
+# Los argumentos se pasan tal cual a `claude`. Sale con el mismo código que claude.
+#
+# Los hooks cubren el fin normal, errores de API y la mayoría de las salidas, pero
+# SIGKILL, OOM o un crash no disparan hooks. Al salir, si ningún hook terminal
+# (Stop/StopFailure/SessionEnd) avisó en esta corrida, publica event=ProcessExit exit=<código>.
+#
+# Inspirado en wake-on-done de eze-grokbot:
+# https://github.com/eze-is/eze-grokbot/tree/main/wake-on-done
+#
+# Variables: NOTIFY_CLAUDE_BIN (default: claude), NOTIFY_HOOK (ruta de notify.sh),
+# más las de notify.sh (NOTIFY_STATE_DIR, DRY_RUN, ...).
+
+set -u
+
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+claude_bin="${NOTIFY_CLAUDE_BIN:-claude}"
+# Mismo default que hooks/notify.sh.
+state_dir="${NOTIFY_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/grokbot-claude-code}"
+
+hook="${NOTIFY_HOOK:-}"
+if [ -z "$hook" ]; then
+  for candidate in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/grokbot-notify.sh" "$script_dir/../hooks/notify.sh"; do
+    if [ -r "$candidate" ]; then
+      hook="$candidate"
+      break
+    fi
+  done
+fi
+
+NOTIFY_RUN_ID="${NOTIFY_RUN_ID:-$(date +%s)-$$}"
+export NOTIFY_RUN_ID
+run_slug=$(printf '%s' "$NOTIFY_RUN_ID" | tr -c 'A-Za-z0-9_.-' '-')
+
+# Corre claude en segundo plano para poder reenviarle INT/TERM y seguir esperando.
+"$claude_bin" "$@" 0<&0 &
+child=$!
+trap 'kill -INT "$child" 2>/dev/null' INT
+trap 'kill -TERM "$child" 2>/dev/null' TERM
+trap 'kill -HUP "$child" 2>/dev/null' HUP
+
+code=0
+while :; do
+  wait "$child"
+  code=$?
+  # wait vuelve antes de tiempo (>128) si llegó una señal atrapada; reintentar mientras viva.
+  kill -0 "$child" 2>/dev/null || break
+done
+trap - INT TERM HUP
+
+if [ ! -e "$state_dir/run-$run_slug.notified" ] && [ -n "$hook" ]; then
+  session="run-$run_slug"
+  if [ -r "$state_dir/run-$run_slug.session" ]; then
+    session=$(head -n 1 "$state_dir/run-$run_slug.session")
+  fi
+  msg="claude salió sin que ningún hook avisara"
+  [ "$code" -gt 128 ] && msg="$msg (señal $((code - 128)))"
+  printf '{"hook_event_name":"ProcessExit","session_id":"%s","cwd":"%s","exit_code":%d,"message":"%s"}\n' \
+    "$session" "$(printf '%s' "$PWD" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')" "$code" "$msg" |
+    bash "$hook" || true
+fi
+
+rm -f "$state_dir/run-$run_slug.notified" "$state_dir/run-$run_slug.session" 2>/dev/null
+exit "$code"
