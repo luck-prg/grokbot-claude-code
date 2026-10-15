@@ -1,4 +1,7 @@
-# grokbot-claude-code
+<img width="3000" height="1200" alt="998bf2483b2458ea92837633b37c1e2e4e1d7a6a01b2b3e9b046cd0f206035dc" src="https://github.com/user-attachments/assets/13c30732-8e83-4844-9468-6c286eac8386" />
+
+# Conecta grokbot con claude-code
+
 
 Notificaciones de Claude Code (nube por defecto, local como fallback) hacia agentes de Grok Bot vía Slack.
 
