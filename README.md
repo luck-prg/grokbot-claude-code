@@ -4,7 +4,7 @@ Notificaciones de Claude Code (local y nube) hacia agentes de Grok Bot vía Slac
 
 Los agentes de Grok Bot delegan código a Claude Code —en la computadora compartida o en la nube (claude.ai/code)— y se enteran cuando Claude termina o necesita input, **sin polling y sin un bot relay que gaste tokens**: hooks de Claude Code publican un mensaje en un canal privado de Slack y cada agente tiene una routine que despierta solo con su keyword.
 
-> **English summary.** Claude Code hooks (`Stop`, `StopFailure`, `Notification`, `PermissionRequest`, `SessionEnd`) post a short Slack mrkdwn message (3-4 lines, built deterministically in bash) to a private Slack channel using a dedicated `chat:write` bot token. Each Grok Bot agent has a routine with a Slack keyword trigger (`notify-<agent-slug>`), so only the right agent wakes up. A small wrapper (`local/notify-run`) covers what hooks can't (SIGKILL, OOM, crashes). Works locally (token in env/config file) and in claude.ai/code cloud environments (token injected by Anthropic's proxy as a network secret). Docs are in Spanish.
+> **English summary.** Claude Code hooks (`Stop`, `StopFailure`, `Notification`, `PermissionRequest`, `SessionEnd`) post a short Slack mrkdwn message (3 lines, built deterministically in bash) to a private Slack channel using a dedicated `chat:write` bot token. Each Grok Bot agent has a routine with a Slack keyword trigger (`notify-<agent-slug>`), so only the right agent wakes up. A small wrapper (`local/notify-run`) covers what hooks can't (SIGKILL, OOM, crashes). Works locally (token in env/config file) and in claude.ai/code cloud environments (token injected by Anthropic's proxy as a network secret). Docs are in Spanish.
 
 ## Cómo funciona
 
@@ -22,7 +22,6 @@ Mensaje publicado:
 ```
 🤖 *Claude Code* · `Stop` · <https://claude.ai/code/abc|sesión>
 repo `owner/name` · rama `feature/x` · agente `notify-dev-fe` · tarea `t`
-> resumen de una línea…
 notify-dev-fe event=Stop task=t session=<session_id o url> branch=feature/x
 ```
 
@@ -30,8 +29,7 @@ Se publica como un solo campo `text` (sin `blocks`), así el keyword `notify-<sl
 
 - **Línea 1:** evento y, si hay, su detalle: `` `StopFailure` · `error=rate_limit` ``, `type=permission_prompt` (Notification), `tool=Bash` (PermissionRequest), `reason=other` (SessionEnd), `exit=137` (ProcessExit). La sesión es un link `<url|sesión>` en la nube y el id en código (`` `id` ``) en local.
 - **Línea 2:** repo `owner/name` (del `git remote get-url origin`; soporta https y ssh, quita `.git` y nunca muestra credenciales ni host), rama, agente (`notify-<slug>`, el keyword de la routine) y tarea. Los campos vacíos o `-` se omiten.
-- **Línea 3:** `> resumen` de una línea, recortado a 140 caracteres + `…`. Se omite si no hay.
-- **Línea 4:** campos legibles por máquina en texto plano: `notify-<slug> event=<evento>[ detalle] task=<tarea> session=<id|url> branch=<rama>`. Es la que deben parsear routines y skills (con `-` en los campos vacíos).
+- **Línea 3:** campos legibles por máquina en texto plano: `notify-<slug> event=<evento>[ detalle] task=<tarea> session=<id|url> branch=<rama>`. Es la que deben parsear routines y skills (con `-` en los campos vacíos).
 
 **A quién avisar:** archivo `.claude-notify` en la carpeta de trabajo o en la raíz del repo/worktree, escrito por el agente al lanzar la tarea:
 
@@ -42,7 +40,7 @@ NOTIFY_TASK=<nombre-de-la-tarea>
 
 Si no existe, se usan las variables de entorno `NOTIFY_AGENT` / `NOTIFY_TASK`. Si no hay agente, no se envía nada.
 
-El único `notify-` real del mensaje es el keyword del principio: en el resto (resumen, tarea, rama, repo, detalle) cada `notify-` se reemplaza por `notify‐` (guion U+2010) y `&`, `<`, `>` se escapan, así un resumen no puede despertar a otro agente ni hacer ping con `<!channel>`, `<@U…>` o `<#C…>`.
+El único `notify-` real del mensaje es el keyword del principio: en el resto (tarea, rama, repo, detalle) cada `notify-` se reemplaza por `notify‐` (guion U+2010) y `&`, `<`, `>` se escapan, así una tarea o una rama no pueden despertar a otro agente ni hacer ping con `<!channel>`, `<@U…>` o `<#C…>`.
 
 ## Contenido
 
@@ -186,7 +184,7 @@ Configurá las notificaciones de Claude Code para vos, con el flujo por agente d
 2. Preguntame el nombre del canal de avisos (#<canal>) y su channel id (estilo C0123456789), y confirmá conmigo tu slug (proponé uno: <slug>). Preguntame qué notify-... ya se usan en el canal.
 3. Chequeá tu slug contra los ya usados con: bash ~/grokbot-claude-code/local/check-slugs <slug> <slug-ya-usado> ... Si sale 1 (colisión por substring, p.ej. notify-dev vs notify-dev-ml), proponé otro.
 4. Verificá que ~/.config/grokbot-claude-code/env tenga modo 600 y SLACK_NOTIFY_CHANNEL con el id que te di. Si SLACK_NOTIFY_TOKEN sigue en xoxb-REPLACE_ME, pedímelo por un canal seguro; no lo escribas en ningún repo ni mensaje.
-5. Creá tu routine con trigger {type:'slack', channel:'#<canal>', match:{kind:'keyword', keyword:'notify-<slug>'}} con la instrucción de la skill (campos desde la última línea del aviso, resumen desde la línea que empieza con >) y guardá en tu memoria slug, keyword y canal (NOTIFY_AGENT=<slug> al lanzar tareas).
+5. Creá tu routine con trigger {type:'slack', channel:'#<canal>', match:{kind:'keyword', keyword:'notify-<slug>'}} con la instrucción de la skill (campos desde la última línea del aviso) y guardá en tu memoria slug, keyword y canal (NOTIFY_AGENT=<slug> al lanzar tareas).
 6. Reemplazá tu skill claude-code-task por ~/grokbot-claude-code/skill/claude-code-task/SKILL.md.
 7. Hacé UNA sola prueba con el bot de notificaciones (vía el hook, como dice la skill) y reportame keyword, canal y si tu routine disparó. Si no, revisá ${XDG_STATE_HOME:-~/.local/state}/grokbot-claude-code/notify.log.
 No hagas polling, no mergees, no hagas push de nada en este repo.
@@ -198,10 +196,10 @@ Verificado con `claude -p` real en Linux (Stop + dedup de SessionEnd, Stop en pa
 
 | Situación | Qué se publica |
 | :- | :- |
-| Fin normal del turno (`claude -p`) | `event=Stop` con el último mensaje como resumen. El `SessionEnd` siguiente se descarta (dedup por sesión). |
+| Fin normal del turno (`claude -p`) | `event=Stop`. El `SessionEnd` siguiente se descarta (dedup por sesión). |
 | Stop con tareas en segundo plano o crons pendientes (`background_tasks`/`session_crons`) | Nada: la sesión está en pausa. Avisa el Stop final, el `SessionEnd` o el `ProcessExit`. |
 | Error de API / rate limit / usage limit | `event=StopFailure error=<tipo>`. |
-| Pide permiso | `event=PermissionRequest tool=<tool>` al instante, con `> <tool>` como resumen (nunca el `tool_input`: el comando puede traer credenciales). El `Notification permission_prompt` posterior (≈6 s) se descarta si hubo PermissionRequest en los últimos 120 s. |
+| Pide permiso | `event=PermissionRequest tool=<tool>` al instante, solo con el nombre de la tool (nunca el `tool_input`: el comando puede traer credenciales). El `Notification permission_prompt` posterior (≈6 s) se descarta si hubo PermissionRequest en los últimos 120 s. |
 | Elicitation MCP / sesión interactiva ociosa | `event=Notification type=elicitation_dialog\|elicitation_url_dialog\|idle_prompt` (idle se descarta si ya hubo Stop en ese turno). |
 | `--max-turns`, SIGINT/SIGTERM, salida sin Stop | `event=SessionEnd reason=<motivo>` (timeout del hook 10 s; el default de SessionEnd es 1.5 s). |
 | SIGKILL / OOM / crash (con `notify-run`) | `event=ProcessExit exit=<código>` (p.ej. 137), con el session_id si algún hook llegó a verlo. |

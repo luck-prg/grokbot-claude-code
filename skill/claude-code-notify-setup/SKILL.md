@@ -14,7 +14,6 @@ Los hooks de Claude Code (local o nube) publican en el canal de avisos un mensaj
 ```
 🤖 *Claude Code* · `Stop` · <url|sesión>
 repo `owner/name` · rama `<rama>` · agente `notify-<slug>` · tarea `<tarea>`
-> <resumen de una línea>
 notify-<slug> event=<evento> task=<tarea> session=<id|url> branch=<rama>
 ```
 
@@ -56,7 +55,7 @@ Trigger, con el nombre de canal que te dio el usuario:
 
 Instrucción de la routine:
 
-> Llegó un aviso de Claude Code. Leé la última línea del mensaje (`notify-<slug> event=... task=... session=... branch=...`) y sacá `event=`, `task=`, `session=` y `branch=`; el resumen es la línea que empieza con `>` (puede faltar). Buscá la tarea por `task=` y seguí "Al recibir el aviso" de la skill claude-code-task: continuá la tarea o reportá el resultado a quien la pidió. No cambies nada fuera del alcance de esa tarea.
+> Llegó un aviso de Claude Code. Leé la última línea del mensaje (`notify-<slug> event=... task=... session=... branch=...`) y sacá `event=`, `task=`, `session=` y `branch=`. Buscá la tarea por `task=` y seguí "Al recibir el aviso" de la skill claude-code-task: continuá la tarea o reportá el resultado a quien la pidió. No cambies nada fuera del alcance de esa tarea.
 
 Requisito: `@Cursor` tiene que estar invitado a `#<canal>` (es la app que dispara las routines; si no ve el canal, la routine nunca salta). Si no está, pedíselo al usuario.
 
@@ -104,7 +103,7 @@ Prompt por agente (lo que mandás con `SendToAgent` o le das al usuario para peg
 Configurate para que te despierten los avisos de Claude Code (skill claude-code-notify-setup del repo grokbot-claude-code).
 - Canal de avisos: #<canal>
 - Tu slug: <slug> (keyword notify-<slug>). Ya está chequeado contra colisión por substring con los demás slugs.
-1) Creá en vos una routine con trigger {"type":"slack","channel":"#<canal>","match":{"kind":"keyword","keyword":"notify-<slug>"}} cuya instrucción lea la última línea del aviso (notify-<slug> event=... task=... session=... branch=...), tome el resumen de la línea que empieza con > (puede faltar) y siga "Al recibir el aviso" de la skill claude-code-task, sin cambiar nada fuera del alcance de la tarea.
+1) Creá en vos una routine con trigger {"type":"slack","channel":"#<canal>","match":{"kind":"keyword","keyword":"notify-<slug>"}} cuya instrucción lea la última línea del aviso (notify-<slug> event=... task=... session=... branch=...) y siga "Al recibir el aviso" de la skill claude-code-task, sin cambiar nada fuera del alcance de la tarea.
 2) Guardá en tu memoria el slug, el keyword y el canal; usá NOTIFY_AGENT=<slug> al lanzar tareas.
 3) No hagas la prueba vos: avisame cuando la routine esté creada y yo mando una sola prueba.
 No pegues tokens en el chat ni en ningún repo. No hagas polling.

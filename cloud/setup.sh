@@ -26,10 +26,9 @@ cat >"$hook" <<'GROKBOT_NOTIFY_SH_EOF'
 # grokbot-claude-code: hook de Claude Code que avisa en Slack a un agente de Grok Bot.
 #
 # Lee el JSON del hook por stdin y publica en el canal de notificaciones un mensaje
-# Slack mrkdwn de 3-4 líneas (ver format_message):
+# Slack mrkdwn de 3 líneas (ver format_message):
 #   🤖 *Claude Code* · `Stop` · <url|sesión>
 #   repo `owner/name` · rama `x` · agente `notify-<agente>` · tarea `t`
-#   > resumen de una línea…
 #   notify-<agente> event=Stop task=t session=<id|url> branch=x
 #
 # Nunca bloquea ni hace fallar a Claude: siempre sale con 0 y no escribe JSON en stdout.
@@ -49,7 +48,6 @@ cat >"$hook" <<'GROKBOT_NOTIFY_SH_EOF'
 #                         a un servidor falso local, ver tests/test-scripts.sh). No tocar en uso real.
 
 SLACK_API_URL="${SLACK_API_URL:-https://slack.com/api/chat.postMessage}"
-SUMMARY_MAX=140
 
 # Estado y log por usuario, nunca en un /tmp compartido.
 umask 077
@@ -136,10 +134,10 @@ json_escape() {
     awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
 }
 
-# Una línea, sin espacios repetidos, recortada a <max> caracteres (default SUMMARY_MAX) + "…".
+# oneline <texto> <max>: una línea, sin espacios repetidos, recortada a <max> caracteres + "…".
 # El recorte cuenta caracteres UTF-8, no bytes, y nunca parte un carácter multibyte.
 oneline() {
-  local s max="${2:-$SUMMARY_MAX}" l probe="é"
+  local s max="$2" l probe="é"
   s=$(printf '%s' "$1" | tr '\n\r\t' '   ' | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')
   for l in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
     ( LC_ALL=$l; [ "${#probe}" = 1 ] ) 2>/dev/null || continue
@@ -156,7 +154,7 @@ oneline() {
   printf '%s' "$s"
 }
 
-# Texto libre (resumen, tarea, rama): que no despierte a otro agente ni haga ping.
+# Texto libre (tarea, rama): que no despierte a otro agente ni haga ping.
 # notify- → notify‐ (U+2010) y & < > escapados como pide Slack (<!channel>, <@U…>, <#C…>).
 neutralize() {
   printf '%s' "$1" | sed -e 's/\([Nn][Oo][Tt][Ii][Ff][Yy]\)-/\1‐/g' \
@@ -193,15 +191,14 @@ repo_slug() {
   printf '%s' "$path" | awk -F/ 'NF >= 2 { print $(NF-1) "/" $NF }'
 }
 
-# format_message <evento> <detalle> <resumen> <sesión> <agente> <tarea> <rama> <repo>
+# format_message <evento> <detalle> <sesión> <agente> <tarea> <rama> <repo>
 # Arma el texto Slack mrkdwn (el campo "text" del POST). Sin LLM, determinístico:
 #   🤖 *Claude Code* · `Stop` · <https://claude.ai/code/abc|sesión>
 #   repo `o/n` · rama `x` · agente `notify-slug` · tarea `t`
-#   > resumen
 #   notify-slug event=Stop task=t session=<id|url> branch=x
-# El único notify-<slug> real es el del agente (líneas 2 y 4); el texto variable se neutraliza.
+# El único notify-<slug> real es el del agente (líneas 2 y 3); el texto variable se neutraliza.
 format_message() {
-  local event="$1" detail="$2" summary="$3" session="$4" agent="$5" task="$6" branch="$7" repo="$8"
+  local event="$1" detail="$2" session="$3" agent="$4" task="$5" branch="$6" repo="$7"
   local nl=$'\n' out sess url fields="" f
 
   case "$session" in
@@ -223,9 +220,6 @@ format_message() {
     fi
   done
   [ -n "$fields" ] && out+="$nl$fields"
-
-  summary=$(oneline "$summary")
-  case "$summary" in '' | '-') ;; *) out+="$nl> $(neutralize "$summary")" ;; esac
 
   out+="$nl""notify-$agent $(neutralize "event=$event${detail:+ $detail} task=${task:--} session=$session branch=${branch:--}" | tr -d '`')"
   printf '%s' "$out"
@@ -354,7 +348,7 @@ main() {
     return 0
   fi
 
-  local detail="" summary="" terminal=0 key="$event"
+  local detail="" terminal=0 key="$event"
   case "$event" in
     Stop)
       terminal=1
@@ -366,14 +360,12 @@ main() {
         log "Stop en pausa (tareas en segundo plano/crons), no se avisa: $SESSION_ID"
         return 0
       fi
-      summary=$(json_get last_assistant_message)
       ;;
     StopFailure)
       terminal=1
       key="StopFailure-$turn"
       marked "$key" && return 0
       detail="error=$(slug "$(json_get error)")"
-      summary=$(json_get last_assistant_message)
       ;;
     SessionEnd)
       terminal=1
@@ -398,14 +390,10 @@ main() {
       key="Notification-$ntype-$turn"
       marked "$key" && return 0
       detail="type=$ntype"
-      summary=$(json_get message)
       ;;
     PermissionRequest)
       # Solo el nombre de la tool: tool_input (p.ej. el comando) puede traer credenciales.
-      local tool
-      tool=$(json_get tool_name)
-      detail="tool=$(slug "$tool")"
-      summary="$tool"
+      detail="tool=$(slug "$(json_get tool_name)")"
       ;;
     SessionStart)
       [ "${NOTIFY_SESSION_START:-0}" = "1" ] || return 0
@@ -416,7 +404,6 @@ main() {
       # Lo genera local/notify-run cuando ningún hook avisó (SIGKILL, OOM, crash).
       terminal=1
       detail="exit=$(slug "$(json_get exit_code)")"
-      summary=$(json_get message)
       ;;
     *)
       return 0
@@ -438,7 +425,7 @@ main() {
   [ -n "$branch" ] || branch="-"
   repo=$(repo_slug "$(git -C "$cwd" remote get-url origin 2>/dev/null)")
 
-  text=$(format_message "$event" "$detail" "$summary" "$session" "$AGENT" "$TASK" "$branch" "$repo")
+  text=$(format_message "$event" "$detail" "$session" "$AGENT" "$TASK" "$branch" "$repo")
 
   # Las marcas de dedup van después de un envío exitoso: si falla, el próximo evento reintenta.
   send "$text" || return 0

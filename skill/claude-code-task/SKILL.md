@@ -14,11 +14,10 @@ Cuando Claude termina, falla o necesita input, un hook publica en el canal priva
 ```
 🤖 *Claude Code* · `Stop` · <url|sesión>
 repo `owner/name` · rama `<rama>` · agente `notify-<slug>` · tarea `<tarea>`
-> <resumen de una línea>
 notify-<slug> event=<evento> task=<tarea> session=<id|url> branch=<rama>
 ```
 
-La última línea es la que se parsea: `event=` (con su detalle, p.ej. `error=rate_limit`), `task=`, `session=` y `branch=`. El resumen es la línea que empieza con `>` (puede faltar).
+La última línea es la que se parsea: `event=` (con su detalle, p.ej. `error=rate_limit`), `task=`, `session=` y `branch=`.
 
 Tu routine con trigger Slack por keyword `notify-<slug>` te despierta solo a vos. **No hagas polling** (no `sleep`, no revisar `run.log` en loop, no `ps`): esperá el mensaje.
 
@@ -60,7 +59,7 @@ Instrucción de la routine: "Llegó un aviso de Claude Code. Leé la última lí
 - Las mismas reglas aplican.
 
 ## Al recibir el aviso
-Leé la última línea (`event=`, `task=`, `session=`, `branch=`) y el resumen (`> ...`) como pista, no como verdad. Según `event=`:
+Leé los campos de la última línea (`event=`, `task=`, `session=`, `branch=`); el mensaje no trae resumen de lo que hizo Claude. Según `event=`:
 - `Stop`: Claude terminó el turno. Leé `STATUS.md` y verificá vos (tests, diff). No confiés solo en la nota. Si está bien, hacé push de la rama y abrí el PR siguiendo las reglas del repo. Borrá la carpeta con `git worktree remove` al cerrar.
 - `PermissionRequest` / `Notification type=permission_prompt|elicitation_*`: Claude necesita permiso o input. En `-p` el permiso se deniega solo; revisá `run.log` y, si hace falta, relanzá con el permiso adecuado. En la nube, respondé en la sesión.
 - `Notification type=idle_prompt`: sesión interactiva esperando input.

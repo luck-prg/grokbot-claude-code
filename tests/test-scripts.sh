@@ -102,9 +102,10 @@ rc=$?
 if [ "$rc" = 0 ] && [ "$(n_requests)" = 1 ] &&
   [ "$(req_channel 1)" = C0123456789 ] &&
   req_text 1 | tail -n 1 | grep -qx 'notify-agente-x event=Stop task=tarea-1 session=s1 branch=-' &&
+  [ "$(req_text 1 | wc -l)" = 3 ] && ! req_text 1 | grep -q -e '^>' -e 'listo' &&
   [ "$(req_auth 1)" = "Bearer $fake_token" ] &&
   grep -q 'enviado: ' "$NOTIFY_STATE_DIR/notify.log"; then
-  ok "notify.sh POST real: canal, keyword y Authorization"
+  ok "notify.sh POST real: canal, 3 líneas, keyword y Authorization"
 else
   ko "notify.sh POST real" "rc=$rc req=$(cat "$captured" 2>/dev/null) log=$(cat "$NOTIFY_STATE_DIR/notify.log" 2>/dev/null)"
 fi
