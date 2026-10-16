@@ -18,7 +18,7 @@ Los agentes de Grok Bot delegan código a Claude Code —por defecto en la nube 
 ## Cómo funciona
 
 1. Le pedís una tarea de código a tu agente de Grok Bot.
-2. El agente lanza `claude --cloud` con la línea `notify: <slug>` en el prompt.
+2. El agente lanza `claude --cloud` con la línea `notify: <slug>` en el prompt y la regla de rama gitflow (`feature/`, `hotfix/` o `release/`; nunca `claude/` ni `cursor/`).
 3. Claude Code trabaja en una sesión de la nube (el environment de claude.ai/code) y pushea la rama.
 4. Al terminar o necesitar input, un hook (`Stop`, `StopFailure`, `Notification`, ...) publica un mensaje en un canal privado de Slack.
 5. La routine de Grok Bot con keyword `notify-<slug>` despierta solo al agente correcto.
