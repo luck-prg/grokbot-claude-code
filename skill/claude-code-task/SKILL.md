@@ -56,7 +56,7 @@ Si todavía no te configuraste, seguí la skill `claude-code-notify-setup`. Tien
 Instrucción de la routine: "Llegó un aviso de Claude Code. Confirmá que la línea `*agente:*` diga `` `notify-<slug>` `` (si no, ignorá el mensaje). Cada línea es `• *<campo>:* <valor>`, con el valor entre backticks o como `<url|session_xxx>`: sacá `evento`, `tarea`, `sesión` y `rama`, buscá la tarea por `tarea` y seguí los pasos de 'Al recibir el aviso' del skill claude-code-task."
 
 ## Pasos (nube, por defecto)
-`claude --cloud "<tarea>"` desde la carpeta del repo crea una sesión que corre en la nube de Anthropic sobre la rama actual del remoto de GitHub. Requiere GitHub conectado a la cuenta de Claude (`/web-setup` dentro de `claude`) y un environment estilo GrokBot configurado con el setup script [`cloud/setup.sh`](../../cloud/setup.sh) (ver README del repo).
+`claude --cloud "<tarea>"` desde la carpeta del repo crea una sesión que corre en la nube de Anthropic sobre la rama actual del remoto de GitHub. Requiere GitHub conectado a la cuenta de Claude (`/web-setup` dentro de `claude`) y un environment estilo GrokBot configurado con el setup script [`cloud/setup.sh`](../../cloud/setup.sh) (ver docs/instalacion.md del repo).
 
 1. Prepará la rama en una carpeta propia y **hacé push antes de lanzar** (la nube solo ve lo que está en el remoto):
    ```

@@ -92,7 +92,7 @@ Usalo cuando el usuario te pide configurar a varios de sus bots de una.
 
 1. **Preguntá** al usuario: nombre del canal (`#<canal>`), channel id (`C0123456789`), la lista de bots a activar y un slug por bot (proponé uno si no lo tiene, y que lo confirme). Preguntá también qué `notify-...` ya existen en el canal.
 2. **Chequeá colisiones** sobre TODOS los slugs (nuevos + ya usados en el canal) con `local/check-slugs`. Si sale 1, ajustá con el usuario y repetí hasta que salga 0.
-3. **Config del hook:** confirmá que el environment de la nube (por defecto) y la máquina compartida (fallback local) tienen `SLACK_NOTIFY_CHANNEL` con el channel id que te dieron (ver README del repo). El token no lo toques vos si no te lo pidieron.
+3. **Config del hook:** confirmá que el environment de la nube (por defecto) y la máquina compartida (fallback local) tienen `SLACK_NOTIFY_CHANNEL` con el channel id que te dieron (ver docs/instalacion.md del repo). El token no lo toques vos si no te lo pidieron.
 4. **Mandale las instrucciones a cada bot:**
    - Si tenés `SendToAgent`, mandale a cada bot el **prompt por agente** de abajo con su canal y su slug ya completos.
    - Si no, dale al usuario un prompt listo para copiar y pegar por bot (el mismo, completo), uno por bot.

@@ -36,7 +36,7 @@ secret_patterns=(
 strip_placeholders() { sed -e 's/C0123456789//g' -e 's/U0123456789//g' -e 's/xoxb-REPLACE_ME//g'; }
 
 skills=(skill/*/SKILL.md)
-docs=("${skills[@]}" README.md)
+docs=("${skills[@]}" README.md docs/*.md)
 
 # 1. Frontmatter.
 for f in "${skills[@]}"; do
