@@ -55,6 +55,12 @@ flowchart TD
 
 Skills: [`skill/claude-code-task/SKILL.md`](skill/claude-code-task/SKILL.md) (correr, continuar y leer tareas) y [`skill/claude-code-notify-setup/SKILL.md`](skill/claude-code-notify-setup/SKILL.md) (onboarding).
 
+## Historial de estrellas
+
+<a href="https://star-history.com/#luck-prg/grokbot-claude-code&Date">
+  <img src="https://api.star-history.com/svg?repos=luck-prg/grokbot-claude-code&type=Date" alt="Historial de estrellas" width="600" />
+</a>
+
 ## Autor
 
 **Luciano Rodriguez**, GenAI Software Engineer (SSr) en Mercado Libre, Buenos Aires, Argentina. Trabaja en productividad de desarrollo, diseñando herramientas con IA que se adaptan a cómo construyen software los equipos. Está terminando Ingeniería en Sistemas de Información en la UTN. Construye [Ágora](https://www.agorasynth.com/), focus groups con agentes sintéticos, y Ray, un agente de IA que busca trabajo por vos.
