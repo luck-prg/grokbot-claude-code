@@ -49,6 +49,12 @@ flowchart TD
 
 Skills: [`skill/claude-code-task/SKILL.md`](skill/claude-code-task/SKILL.md) (correr, continuar y leer tareas) y [`skill/claude-code-notify-setup/SKILL.md`](skill/claude-code-notify-setup/SKILL.md) (onboarding).
 
+## Autor
+
+**Luciano Rodriguez**, GenAI Software Engineer (SSr) en Mercado Libre, Buenos Aires, Argentina. Trabaja en productividad de desarrollo, diseñando herramientas con IA que se adaptan a cómo construyen software los equipos. Está terminando Ingeniería en Sistemas de Información en la UTN. Construye [Ágora](https://www.agorasynth.com/), focus groups con agentes sintéticos, y Ray, un agente de IA que busca trabajo por vos.
+
+[GitHub](https://github.com/luck-prg) · [X](https://x.com/luchoorocker)
+
 ## Créditos
 
 - Eventos y campos de hooks según la [referencia de hooks de Claude Code](https://code.claude.com/docs/en/hooks).
