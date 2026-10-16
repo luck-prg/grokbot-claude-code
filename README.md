@@ -51,5 +51,4 @@ Skills: [`skill/claude-code-task/SKILL.md`](skill/claude-code-task/SKILL.md) (co
 
 ## Créditos
 
-- `local/notify-run` está inspirado en [wake-on-done de eze-grokbot](https://github.com/eze-is/eze-grokbot/tree/main/wake-on-done).
 - Eventos y campos de hooks según la [referencia de hooks de Claude Code](https://code.claude.com/docs/en/hooks).

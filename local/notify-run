@@ -9,9 +9,6 @@
 # SIGKILL, OOM o un crash no disparan hooks. Al salir, si ningún hook terminal
 # (Stop/StopFailure/SessionEnd) avisó en esta corrida, publica un aviso ProcessExit con exit=<código>.
 #
-# Inspirado en wake-on-done de eze-grokbot:
-# https://github.com/eze-is/eze-grokbot/tree/main/wake-on-done
-#
 # Variables: NOTIFY_CLAUDE_BIN (default: claude), NOTIFY_HOOK (ruta de notify.sh),
 # más las de notify.sh (NOTIFY_STATE_DIR, DRY_RUN, ...).
 
