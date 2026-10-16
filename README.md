@@ -1,4 +1,10 @@
 <img width="3000" height="1200" alt="998bf2483b2458ea92837633b37c1e2e4e1d7a6a01b2b3e9b046cd0f206035dc" src="https://github.com/user-attachments/assets/13c30732-8e83-4844-9468-6c286eac8386" />
+<p align="center">
+  <a href="https://github.com/luck-prg/grokbot-claude-code/stargazers"><img src="https://img.shields.io/github/stars/luck-prg/grokbot-claude-code?style=flat&label=estrellas" alt="Estrellas" /></a>
+  <a href="https://github.com/luck-prg/grokbot-claude-code/forks"><img src="https://img.shields.io/github/forks/luck-prg/grokbot-claude-code?style=flat&label=forks" alt="Forks" /></a>
+  <img src="https://komarev.com/ghpvc/?username=luck-prg-grokbot-claude-code&label=vistas&color=blue" alt="Vistas" />
+</p>
+
 
 # Conecta grokbot con claude-code
 
